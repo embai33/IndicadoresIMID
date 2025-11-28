@@ -1,0 +1,2277 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analizador de dispensaciones farmacéuticas en IMID</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #585c70;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: #2b2f49;
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 600;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .main-content {
+            padding: 30px;
+        }
+
+        .upload-section {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 15px;
+            padding: 5px;
+            text-align: center;
+            margin-bottom: 10px;
+            border: 3px dashed #667eea;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .upload-section:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+        }
+
+        .upload-section.dragover {
+            background: #667eea;
+            color: white;
+        }
+
+        .upload-icon {
+            font-size: 2em;
+            margin-bottom: 20px;
+        }
+
+        .file-loaded {
+            background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+            border-color: #28a745;
+        }
+
+        .menu-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .menu-button {
+            background: linear-gradient(135deg, #3d4268 0%, #3d4268 100%);
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 15px;
+            font-size: 1em;
+            font-weight: 300;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+            text-align: left;
+        }
+
+        .menu-button:hover:not(:disabled) {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.5);
+        }
+
+        .menu-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .menu-button .number {
+            display: block;
+            font-size: 2em;
+            margin-bottom: 5px;
+            opacity: 0.8;
+        }
+
+        .results-section {
+            margin-top: 30px;
+            animation: fadeIn 0.5s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .results-header {
+            background: #2b2f49;
+            color: white;
+            padding: 20px;
+            border-radius: 10px 10px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .results-header h2 {
+            font-size: 1.5em;
+        }
+
+        .export-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .export-btn {
+            background: white;
+            color: #667eea;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .export-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 5px 15px rgba(255,255,255,0.3);
+        }
+
+        .table-container {
+            overflow-x: auto;
+            background: white;
+            border-radius: 0 0 10px 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: #f8f9fa;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #667eea;
+            border-bottom: 2px solid #667eea;
+            position: sticky;
+            top: 0;
+        }
+
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        th:first-child,
+        td:first-child {
+            text-align: left;
+            min-width: 200px;
+        }
+
+        th:not(:first-child),
+        td:not(:first-child) {
+            text-align: right;
+        }
+
+        td.number-cell {
+            text-align: right;
+            font-weight: 600;
+            font-variant-numeric: tabular-nums;
+        }
+
+        tr:hover {
+            background: #f8f9fa;
+        }
+
+        .stat-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .stat-card .label {
+            font-size: 0.9em;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+
+        .stat-card .value {
+            font-size: 2.5em;
+            font-weight: 700;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .alert {
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border-left: 4px solid #17a2b8;
+        }
+
+        .alert-warning {
+            background: #fff3cd;
+            color: #856404;
+            border-left: 4px solid #ffc107;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+
+        .chart-container {
+            margin: 30px 0;
+            padding: 20px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+
+        canvas {
+            max-height: 400px;
+        }
+
+        .number-cell {
+            text-align: right;
+            font-weight: 600;
+        }
+
+        .total-row {
+            background: #f8f9fa;
+            font-weight: 700;
+            border-top: 2px solid #667eea;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .filters-section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .filters-section h3 {
+            margin-bottom: 15px;
+            color: #667eea;
+        }
+
+        .filter-group {
+            margin-bottom: 15px;
+        }
+
+        .filter-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #495057;
+        }
+
+        .filter-group select,
+        .filter-group input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e9ecef;
+            border-radius: 8px;
+            font-size: 1em;
+        }
+
+        .filter-group select:focus,
+        .filter-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+    
+        /* Dashboard Styles - AÑADIDO */
+        .view-toggle {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 25px;
+            padding: 15px;
+            background: #f0f2f5;
+            border-radius: 12px;
+        }
+        
+        .toggle-btn {
+            padding: 12px 35px;
+            font-size: 1.05em;
+            font-weight: 600;
+            border: 2px solid transparent;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: white;
+            color: #495057;
+        }
+        
+        .toggle-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #667eea 100%);
+            color: white;
+            border-color: #667eea;
+        }
+        
+        .toggle-btn:hover:not(.active) {
+            background: #e9ecef;
+            transform: translateY(-2px);
+        }
+        
+        .dashboard-kpis {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .kpi-card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+        
+        .kpi-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .kpi-card.primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .kpi-card.success {
+            background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+            color: #155724;
+        }
+        
+        .kpi-card.warning {
+            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+            color: #856404;
+        }
+        
+        .kpi-card.info {
+            background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+            color: #004085;
+        }
+        
+        .kpi-label {
+            font-size: 0.85em;
+            margin-bottom: 8px;
+            opacity: 0.85;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+        
+        .kpi-value {
+            font-size: 2.5em;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        
+        .kpi-subtitle {
+            font-size: 0.8em;
+            opacity: 0.75;
+        }
+        
+        .dashboard-charts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+            gap: 25px;
+            margin-bottom: 25px;
+        }
+        
+        .chart-card {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        
+        .chart-card.full-width {
+            grid-column: 1 / -1;
+        }
+        
+        .chart-title {
+            font-size: 1.2em;
+            font-weight: 600;
+            margin-bottom: 18px;
+            color: #667eea;
+        }
+        
+        .dashboard-ranking {
+            background: white;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            margin-bottom: 25px;
+        }
+        
+        .ranking-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border-bottom: 1px solid #e9ecef;
+        }
+        
+        .ranking-item:last-child {
+            border-bottom: none;
+        }
+        
+        .ranking-item:hover {
+            background: #f8f9fa;
+        }
+        
+        .ranking-rank {
+            font-size: 1.4em;
+            font-weight: 700;
+            color: #667eea;
+            width: 35px;
+        }
+        
+        .ranking-name {
+            flex: 1;
+            font-weight: 600;
+            margin: 0 15px;
+        }
+        
+        .ranking-value {
+            font-size: 1.1em;
+            font-weight: 700;
+            color: #495057;
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard-charts {
+                grid-template-columns: 1fr;
+            }
+            .dashboard-kpis {
+                grid-template-columns: 1fr;
+            }
+            .view-toggle {
+                flex-direction: column;
+            }
+        }
+
+    
+        .analysis-chart-container {
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 3px 15px rgba(0,0,0,0.08);
+            margin-bottom: 20px;
+        }
+        
+        .analysis-chart-container canvas {
+            max-height: 450px;
+        }
+
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const BIOSIMILARES = [
+            'HYRIMOZ', 'IMRALDI', 'IDACIO', 'YUFLIMA',
+            'BENEPALI', 'ERELZI', 'REMSIMA', 'TYENNE',
+            'AVTOZMA', 'UZPRUVO', 'STEQEYMA', 'PYZCHYVA', 'OMLYCLO'
+        ];
+
+        const AGRUPACIONES_PRODUCTOS = [
+            'Hyrimoz 40', 'Idacio 50', 'Enbrel 50',
+            'Enbrel 25', 'Benepali', 'Roactemra 162'
+        ];
+
+        function App() {
+            const [data, setData] = useState(null);
+            const [loading, setLoading] = useState(false);
+            const [results, setResults] = useState(null);
+            const [selectedOption, setSelectedOption] = useState(null);
+            const [fileName, setFileName] = useState('');
+            const [viewMode, setViewMode] = useState('analysis'); // 'dashboard' o 'analysis'
+            const [dragOver, setDragOver] = useState(false);
+            const [filters, setFilters] = useState({
+                year: '',
+                service: '',
+                pathology: '',
+                activeIngredient: ''
+            });
+            const [filteredData, setFilteredData] = useState(null);
+            const [filterOptions, setFilterOptions] = useState({
+                years: [],
+                services: [],
+                pathologies: [],
+                activeIngredients: []
+            });
+            const fileInputRef = useRef(null);
+            const chartRef = useRef(null);
+
+            // useEffect para crear gráficos del dashboard
+            useEffect(() => {
+                if (viewMode === 'dashboard' && data) {
+                    const dataToProcess = applyFilters() || data;
+                    
+                    // Destruir gráficos anteriores
+                    if (window.dashboardCharts) {
+                        Object.values(window.dashboardCharts).forEach(chart => {
+                            if (chart) chart.destroy();
+                        });
+                    }
+                    window.dashboardCharts = {};
+                    
+                    // Gráfico de evolución temporal
+                    const evolutionData = calculateEvolutionByYear(dataToProcess);
+                    const evolutionCtx = document.getElementById('evolutionChart');
+                    if (evolutionCtx) {
+                        window.dashboardCharts.evolution = new Chart(evolutionCtx, {
+                            type: 'line',
+                            data: {
+                                labels: evolutionData.years,
+                                datasets: [
+                                    {
+                                        label: 'Pacientes',
+                                        data: evolutionData.pacientes,
+                                        borderColor: '#667eea',
+                                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                                        tension: 0.4,
+                                        fill: true,
+                                        borderWidth: 3
+                                    },
+                                    {
+                                        label: 'Visitas',
+                                        data: evolutionData.visitas,
+                                        borderColor: '#84fab0',
+                                        backgroundColor: 'rgba(132, 250, 176, 0.1)',
+                                        tension: 0.4,
+                                        fill: true,
+                                        borderWidth: 3
+                                    }
+                                ]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: true,
+                                plugins: { legend: { position: 'top' } },
+                                scales: { y: { beginAtZero: true } }
+                            }
+                        });
+                    }
+                    
+                    // Gráfico top principios activos
+                    const topPA = calculateTopPrincipiosActivos(dataToProcess);
+                    const topPACtx = document.getElementById('topPAChart');
+                    if (topPACtx) {
+                        window.dashboardCharts.topPA = new Chart(topPACtx, {
+                            type: 'bar',
+                            data: {
+                                labels: topPA.map(item => item.name),
+                                datasets: [{
+                                    label: 'Pacientes',
+                                    data: topPA.map(item => item.pacientes),
+                                    backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                                    borderColor: '#667eea',
+                                    borderWidth: 2
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: true,
+                                indexAxis: 'y',
+                                plugins: { legend: { display: false } },
+                                scales: { x: { beginAtZero: true } }
+                            }
+                        });
+                    }
+                    
+                    // Gráfico distribución por servicio
+                    const serviceData = calculateServiceDist(dataToProcess);
+                    const serviceCtx = document.getElementById('serviceChart');
+                    if (serviceCtx) {
+                        window.dashboardCharts.service = new Chart(serviceCtx, {
+                            type: 'doughnut',
+                            data: {
+                                labels: serviceData.map(item => item.name),
+                                datasets: [{
+                                    data: serviceData.map(item => item.count),
+                                    backgroundColor: [
+                                        'rgba(102, 126, 234, 0.8)',
+                                        'rgba(132, 250, 176, 0.8)',
+                                        'rgba(252, 182, 159, 0.8)',
+                                        'rgba(168, 237, 234, 0.8)',
+                                        'rgba(118, 75, 162, 0.8)',
+                                        'rgba(143, 211, 244, 0.8)'
+                                    ],
+                                    borderWidth: 2
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: true,
+                                plugins: { legend: { position: 'bottom' } }
+                            }
+                        });
+                    }
+                    
+                    // Gráfico biosimilares
+                    const biosimData = calculateBiosimilarPenetration(dataToProcess);
+                    const biosimCtx = document.getElementById('biosimilarChart');
+                    if (biosimCtx) {
+                        window.dashboardCharts.biosim = new Chart(biosimCtx, {
+                            type: 'line',
+                            data: {
+                                labels: biosimData.years,
+                                datasets: [{
+                                    label: 'Penetración (%)',
+                                    data: biosimData.percentages,
+                                    borderColor: '#84fab0',
+                                    backgroundColor: 'rgba(132, 250, 176, 0.3)',
+                                    tension: 0.4,
+                                    fill: true,
+                                    borderWidth: 3
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: true,
+                                plugins: { legend: { display: false } },
+                                scales: {
+                                    y: {
+                                        beginAtZero: true,
+                                        max: 100,
+                                        ticks: { callback: value => value + '%' }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+                
+                return () => {
+                    if (window.dashboardCharts) {
+                        Object.values(window.dashboardCharts).forEach(chart => {
+                            if (chart) chart.destroy();
+                        });
+                    }
+                };
+            }, [viewMode, data, filters]);
+
+
+            const handleFileUpload = (file) => {
+                if (!file) return;
+                
+                setLoading(true);
+                setFileName(file.name);
+                
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const workbook = XLSX.read(e.target.result, { type: 'binary' });
+                        const sheetName = workbook.SheetNames[0];
+                        const worksheet = workbook.Sheets[sheetName];
+                        const jsonData = XLSX.utils.sheet_to_json(worksheet);
+                        
+                        // Procesar fechas
+                        jsonData.forEach(row => {
+                            if (row['Fecha Dispensación']) {
+                                const excelDate = row['Fecha Dispensación'];
+                                if (typeof excelDate === 'number') {
+                                    // Convertir fecha de Excel a JavaScript
+                                    const date = new Date((excelDate - 25569) * 86400 * 1000);
+                                    row['Fecha Dispensación'] = date;
+                                } else if (typeof excelDate === 'string') {
+                                    row['Fecha Dispensación'] = new Date(excelDate);
+                                }
+                            }
+                        });
+                        
+                        // Extraer opciones únicas para los filtros
+                        const years = [...new Set(jsonData.map(row => {
+                            if (row['Fecha Dispensación']) {
+                                return row['Fecha Dispensación'].getFullYear();
+                            }
+                            return null;
+                        }).filter(Boolean))].sort();
+
+                        const services = [...new Set(jsonData
+                            .map(row => row['Servicio Prescriptor'])
+                            .filter(Boolean)
+                        )].sort();
+
+                        const pathologies = [...new Set(jsonData
+                            .map(row => row['Patología'])
+                            .filter(Boolean)
+                        )].sort();
+
+                        const activeIngredients = [...new Set(jsonData
+                            .map(row => row['Descripción Principio Activo'])
+                            .filter(Boolean)
+                        )].sort();
+
+                        setFilterOptions({
+                            years,
+                            services,
+                            pathologies,
+                            activeIngredients
+                        });
+
+                        setFilters({ year: '', service: '', pathology: '', activeIngredient: '' });
+                        setData(jsonData);
+                        setLoading(false);
+                    } catch (error) {
+                        alert('Error al procesar el archivo: ' + error.message);
+                        setLoading(false);
+                    }
+                };
+                reader.readAsBinaryString(file);
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setDragOver(false);
+                const file = e.dataTransfer.files[0];
+                if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) {
+                    handleFileUpload(file);
+                } else {
+                    alert('Por favor, sube un archivo Excel (.xlsx o .xls)');
+                }
+            };
+
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                setDragOver(true);
+            };
+
+            const handleDragLeave = () => {
+                setDragOver(false);
+            };
+
+            const applyFilters = () => {
+                if (!data) return null;
+    
+                let filtered = [...data];
+    
+                if (filters.year) {
+                    filtered = filtered.filter(row => 
+                        row['Fecha Dispensación'] && 
+                        row['Fecha Dispensación'].getFullYear() === parseInt(filters.year)
+                    );
+                }
+    
+                if (filters.service) {
+                    filtered = filtered.filter(row => 
+                        row['Servicio Prescriptor'] === filters.service
+                    );
+                }
+    
+                if (filters.pathology) {
+                    filtered = filtered.filter(row => 
+                        row['Patología'] === filters.pathology
+                    );
+                }
+    
+                if (filters.activeIngredient) {
+                    filtered = filtered.filter(row => 
+                        row['Descripción Principio Activo'] === filters.activeIngredient
+                    );
+                }
+    
+                return filtered;
+            };
+
+            const createAnalysisChart = (results, chartId) => {
+                if (window.analysisChart) {
+                    try { window.analysisChart.destroy(); } catch(e) {}
+                }
+                
+                const canvas = document.getElementById(chartId);
+                if (!canvas || !results || !results.data || results.data.length === 0) return;
+                
+                const ctx = canvas.getContext('2d');
+                
+                if (results.type === 'totals') {
+                    window.analysisChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: ['Pacientes', 'Visitas', 'Dispensaciones'],
+                            datasets: [{
+                                label: 'Totales',
+                                data: [results.data[0].Pacientes, results.data[0].Visitas, results.data[0].Dispensaciones],
+                                backgroundColor: ['rgba(102, 126, 234, 0.8)', 'rgba(132, 250, 176, 0.8)', 'rgba(252, 182, 159, 0.8)'],
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: { title: { display: true, text: 'Indicadores Globales' }, legend: { display: false } },
+                            scales: { y: { beginAtZero: true } }
+                        }
+                    });
+                }
+                else if (results.type === 'temporal') {
+                    window.analysisChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: results.data.map(row => row.Periodo),
+                            datasets: [
+                                { label: 'Pacientes', data: results.data.map(row => row.Pacientes), borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', tension: 0.4, fill: true, borderWidth: 3 },
+                                { label: 'Visitas', data: results.data.map(row => row.Visitas), borderColor: '#84fab0', backgroundColor: 'rgba(132, 250, 176, 0.1)', tension: 0.4, fill: true, borderWidth: 3 },
+                                { label: 'Dispensaciones', data: results.data.map(row => row.Dispensaciones), borderColor: '#fcb69f', backgroundColor: 'rgba(252, 182, 159, 0.1)', tension: 0.4, fill: true, borderWidth: 2 }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: { title: { display: true, text: results.title }, legend: { position: 'top' } },
+                            scales: { y: { beginAtZero: true } }
+                        }
+                    });
+                }
+                else if (results.type === 'pivot') {
+                    const topData = results.data.slice(0, 10);
+                    const labels = topData.map(row => row['Principio Activo'] || row['Biosimilar']);
+                    const totals = topData.map(row => row.TOTAL);
+                    
+                    window.analysisChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [{ label: 'Pacientes', data: totals, backgroundColor: 'rgba(102, 126, 234, 0.8)', borderColor: '#667eea', borderWidth: 2 }]
+                        },
+                        options: {
+                            responsive: true,
+                            indexAxis: 'y',
+                            plugins: { title: { display: true, text: results.title + ' (Top 10)' }, legend: { display: false } },
+                            scales: { x: { beginAtZero: true } }
+                        }
+                    });
+                }
+                else if (results.type === 'product') {
+                    console.log('📦 INICIO Procesando productos');
+                    console.log('📦 Total filas:', results.data.length);
+                    console.log('📦 Primera fila completa:', results.data[0]);
+                    console.log('📦 Columnas:', Object.keys(results.data[0] || {}));
+                    
+                    const productTotals = {};
+                    results.data.forEach(row => {
+                        const producto = row.Producto;
+                        if (!producto) return;
+                        
+                        // Los datos vienen pivoteados, usar las columnas TOTAL
+                        const unidadesStr = row['TOTAL Unidades'] || '0';
+                        const costeStr = row['TOTAL Coste'] || '0';
+                        
+                        // Parsear unidades
+                        const unidades = parseFloat(unidadesStr) || 0;
+                        
+                        // Parsear coste (puede tener formato español)
+                        let costeParsed = costeStr;
+                        if (typeof costeParsed === 'string') {
+                            // Remover separadores de miles y reemplazar coma decimal por punto
+                            costeParsed = costeParsed.replace(/\./g, '').replace(',', '.');
+                        }
+                        const coste = parseFloat(costeParsed) || 0;
+                        
+                        productTotals[producto] = { unidades, coste };
+                    });
+                    
+                    const sorted = Object.entries(productTotals)
+                        .filter(item => item[1].coste > 0)
+                        .sort((a, b) => b[1].coste - a[1].coste)
+                        .slice(0, 10);
+                    
+                    console.log('📊 Productos con coste:', sorted.map(item => ({
+                        producto: item[0],
+                        coste: item[1].coste
+                    })));
+                    
+                    if (sorted.length === 0) {
+                        console.warn('⚠️ No hay datos de coste para mostrar');
+                        return;
+                    }
+                    
+                    window.analysisChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: sorted.map(item => item[0]),
+                            datasets: [{ 
+                                label: 'Coste (€)', 
+                                data: sorted.map(item => item[1].coste), 
+                                backgroundColor: 'rgba(252, 182, 159, 0.8)', 
+                                borderColor: '#fcb69f', 
+                                borderWidth: 2 
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            indexAxis: 'y',
+                            plugins: { 
+                                title: { display: true, text: 'Top 10 Medicamentos por Coste' }, 
+                                legend: { display: false } 
+                            },
+                            scales: { 
+                                x: { 
+                                    beginAtZero: true,
+                                    ticks: { 
+                                        callback: function(value) {
+                                            return '€' + value.toLocaleString('es-ES', {
+                                                minimumFractionDigits: 0,
+                                                maximumFractionDigits: 0
+                                            });
+                                        }
+                                    }
+                                } 
+                            }
+                        }
+                    });
+                }
+            };
+
+
+            
+            // === FUNCIONES PARA DASHBOARD ===
+            const calculateGlobalTotals = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+
+                const pacientes = new Set(validData.map(row => row['Id'])).size;
+                const visitas = new Set(validData.map(row => 
+                    `${row['Id']}_${row['Fecha Dispensación'].toISOString().split('T')[0]}`
+                )).size;
+                const dispensaciones = validData.length;
+                const coste = validData.reduce((sum, row) => 
+                    sum + (parseFloat(row['Coste Dispensación']) || 0), 0
+                );
+
+                return { pacientes, visitas, dispensaciones, coste };
+            };
+            
+            const calculateEvolutionByYear = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+
+                const yearData = {};
+                validData.forEach(row => {
+                    const year = row['Fecha Dispensación'].getFullYear();
+                    if (!yearData[year]) {
+                        yearData[year] = { ids: new Set(), visitas: new Set(), dispensaciones: 0 };
+                    }
+                    yearData[year].ids.add(row['Id']);
+                    yearData[year].visitas.add(
+                        `${row['Id']}_${row['Fecha Dispensación'].toISOString().split('T')[0]}`
+                    );
+                    yearData[year].dispensaciones++;
+                });
+
+                const years = Object.keys(yearData).sort();
+                return {
+                    years,
+                    pacientes: years.map(y => yearData[y].ids.size),
+                    visitas: years.map(y => yearData[y].visitas.size),
+                    dispensaciones: years.map(y => yearData[y].dispensaciones)
+                };
+            };
+            
+            const calculateTopPrincipiosActivos = (dataToProcess, limit = 8) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Descripción Principio Activo'] && row['Id']
+                );
+
+                const paData = {};
+                validData.forEach(row => {
+                    const pa = row['Descripción Principio Activo'];
+                    if (!paData[pa]) {
+                        paData[pa] = { ids: new Set(), coste: 0 };
+                    }
+                    paData[pa].ids.add(row['Id']);
+                    paData[pa].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                return Object.keys(paData)
+                    .map(pa => ({ name: pa, pacientes: paData[pa].ids.size, coste: paData[pa].coste }))
+                    .sort((a, b) => b.pacientes - a.pacientes)
+                    .slice(0, limit);
+            };
+            
+            const calculateServiceDist = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => row['Servicio Prescriptor']);
+                const serviceData = {};
+                
+                validData.forEach(row => {
+                    const service = row['Servicio Prescriptor'];
+                    serviceData[service] = (serviceData[service] || 0) + 1;
+                });
+
+                return Object.keys(serviceData)
+                    .map(service => ({ name: service, count: serviceData[service] }))
+                    .sort((a, b) => b.count - a.count)
+                    .slice(0, 6);
+            };
+            
+            const calculateBiosimilarPenetration = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row['Descripción Producto Dispensado']
+                );
+
+                const yearData = {};
+                validData.forEach(row => {
+                    const year = row['Fecha Dispensación'].getFullYear();
+                    const producto = row['Descripción Producto Dispensado'].toUpperCase();
+                    const isBio = BIOSIMILARES.some(bio => producto.includes(bio));
+                    
+                    if (!yearData[year]) {
+                        yearData[year] = { total: 0, biosimilares: 0 };
+                    }
+                    yearData[year].total++;
+                    if (isBio) yearData[year].biosimilares++;
+                });
+
+                const years = Object.keys(yearData).sort();
+                return {
+                    years,
+                    percentages: years.map(y => 
+                        (yearData[y].biosimilares / yearData[y].total * 100).toFixed(1)
+                    )
+                };
+            };
+            
+            const processOption = (option) => {
+                if (!data) {
+                    alert('Por favor, carga un archivo Excel primero');
+                    return;
+                }
+
+                setLoading(true);
+                setSelectedOption(option);
+
+                // Simular procesamiento (en la práctica sería inmediato)
+                setTimeout(() => {
+                    const dataToProcess = applyFilters() || data;
+                    let result;
+                    switch(option) {
+                        case 1:
+                            result = calculateTotals(dataToProcess);
+                            break;
+                        case 2:
+                            result = calculateByYears(dataToProcess);
+                            break;
+                        case 3:
+                            result = calculateByQuarters(dataToProcess);
+                            break;
+                        case 4:
+                            result = calculateByMonths(dataToProcess);
+                            break;
+                        case 5:
+                            result = calculatePatientsByActiveIngredientByYear(dataToProcess);
+                            break;
+                        case 6:
+                            result = calculatePatientsByActiveIngredientByQuarter(dataToProcess);
+                            break;
+                        case 7:
+                            result = calculatePatientsByActiveIngredientByMonth(dataToProcess);
+                            break;
+                        case 8:
+                            result = calculateBiosimilarPatientsByYear(dataToProcess);
+                            break;
+                        case 9:
+                            result = calculateBiosimilarPatientsByQuarter(dataToProcess);
+                            break;
+                        case 10:
+                            result = calculateBiosimilarPatientsByMonth(dataToProcess);
+                            break;
+                        case 11:
+                            result = calculateUnitsAndCostByProductByYear(dataToProcess);
+                            break;
+                        case 12:
+                            result = calculateUnitsAndCostByProductByQuarter(dataToProcess);
+                            break;
+                        case 13:
+                            result = calculateUnitsAndCostByProductByMonth(dataToProcess);
+                            break;
+                        default:
+                            result = { type: 'custom', data: [], title: 'Análisis Personalizado' };
+                    }
+                    setResults(result);
+                    setLoading(false);
+                    
+                    // Crear gráfico tras setear resultados
+                    setTimeout(() => {
+                        const canvas = document.getElementById('analysisChart');
+                        if (canvas && result && result.data && result.data.length > 0) {
+                            createAnalysisChart(result, 'analysisChart');
+                        }
+                    }, 600);
+                }, 500);
+            };
+
+            const calculateTotals = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+
+                const pacientes = new Set(validData.map(row => row['Id'])).size;
+                
+                const visitas = new Set(validData.map(row => 
+                    `${row['Id']}_${row['Fecha Dispensación'].toISOString().split('T')[0]}`
+                )).size;
+
+                const dispensaciones = validData.length;
+                
+                const coste = validData.reduce((sum, row) => 
+                    sum + (parseFloat(row['Coste Dispensación']) || 0), 0
+                );
+
+                return {
+                    type: 'totals',
+                    title: 'Totales Globales',
+                    data: [{
+                        Periodo: 'TOTAL',
+                        Pacientes: pacientes,
+                        Visitas: visitas,
+                        Dispensaciones: dispensaciones,
+                        Coste: coste.toFixed(2)
+                    }]
+                };
+            };
+
+            const calculateByYears = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+
+                const yearData = {};
+                
+                validData.forEach(row => {
+                    const year = row['Fecha Dispensación'].getFullYear();
+                    if (!yearData[year]) {
+                        yearData[year] = {
+                            ids: new Set(),
+                            visitas: new Set(),
+                            dispensaciones: 0,
+                            coste: 0
+                        };
+                    }
+                    
+                    yearData[year].ids.add(row['Id']);
+                    yearData[year].visitas.add(
+                        `${row['Id']}_${row['Fecha Dispensación'].toISOString().split('T')[0]}`
+                    );
+                    yearData[year].dispensaciones++;
+                    yearData[year].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const results = Object.keys(yearData).sort().map(year => ({
+                    Periodo: year,
+                    Pacientes: yearData[year].ids.size,
+                    Visitas: yearData[year].visitas.size,
+                    Dispensaciones: yearData[year].dispensaciones,
+                    Coste: yearData[year].coste.toFixed(2)
+                }));
+
+                return {
+                    type: 'temporal',
+                    title: 'Indicadores por Años',
+                    data: results,
+                    chartType: 'line'
+                };
+            };
+
+            const calculateByQuarters = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+
+                const quarterData = {};
+                
+                validData.forEach(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = date.getMonth();
+                    const quarter = Math.floor(month / 3) + 1;
+                    const key = `${year}-Q${quarter}`;
+                    
+                    if (!quarterData[key]) {
+                        quarterData[key] = {
+                            ids: new Set(),
+                            visitas: new Set(),
+                            dispensaciones: 0,
+                            coste: 0
+                        };
+                    }
+                    
+                    quarterData[key].ids.add(row['Id']);
+                    quarterData[key].visitas.add(
+                        `${row['Id']}_${date.toISOString().split('T')[0]}`
+                    );
+                    quarterData[key].dispensaciones++;
+                    quarterData[key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const results = Object.keys(quarterData).sort().map(quarter => ({
+                    Periodo: quarter,
+                    Pacientes: quarterData[quarter].ids.size,
+                    Visitas: quarterData[quarter].visitas.size,
+                    Dispensaciones: quarterData[quarter].dispensaciones,
+                    Coste: quarterData[quarter].coste.toFixed(2)
+                }));
+
+                return {
+                    type: 'temporal',
+                    title: 'Indicadores por Trimestres',
+                    data: results,
+                    chartType: 'line'
+                };
+            };
+
+            const calculateByMonths = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+
+                const monthData = {};
+                
+                validData.forEach(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = date.getMonth() + 1;
+                    const key = `${year}-${String(month).padStart(2, '0')}`;
+                    
+                    if (!monthData[key]) {
+                        monthData[key] = {
+                            ids: new Set(),
+                            visitas: new Set(),
+                            dispensaciones: 0,
+                            coste: 0
+                        };
+                    }
+                    
+                    monthData[key].ids.add(row['Id']);
+                    monthData[key].visitas.add(
+                        `${row['Id']}_${date.toISOString().split('T')[0]}`
+                    );
+                    monthData[key].dispensaciones++;
+                    monthData[key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const results = Object.keys(monthData).sort().map(month => ({
+                    Periodo: month,
+                    Pacientes: monthData[month].ids.size,
+                    Visitas: monthData[month].visitas.size,
+                    Dispensaciones: monthData[month].dispensaciones,
+                    Coste: monthData[month].coste.toFixed(2)
+                }));
+
+                return {
+                    type: 'temporal',
+                    title: 'Indicadores por Meses',
+                    data: results,
+                    chartType: 'line'
+                };
+            };
+
+            const calculatePatientsByActiveIngredientByYear = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && 
+                    row['Id'] && 
+                    row['Descripción Principio Activo']
+                );
+
+                const paData = {};
+                
+                validData.forEach(row => {
+                    const pa = row['Descripción Principio Activo'];
+                    const year = row['Fecha Dispensación'].getFullYear();
+                    
+                    if (!paData[pa]) {
+                        paData[pa] = {};
+                    }
+                    if (!paData[pa][year]) {
+                        paData[pa][year] = new Set();
+                    }
+                    
+                    paData[pa][year].add(row['Id']);
+                });
+
+                // Obtener todos los años
+                const years = [...new Set(validData.map(row => 
+                    row['Fecha Dispensación'].getFullYear()
+                ))].sort();
+
+                const results = Object.keys(paData).map(pa => {
+                    const row = { 'Principio Activo': pa };
+                    let total = new Set();
+                    
+                    years.forEach(year => {
+                        if (paData[pa][year]) {
+                            row[year] = paData[pa][year].size;
+                            paData[pa][year].forEach(id => total.add(id));
+                        } else {
+                            row[year] = 0;
+                        }
+                    });
+                    
+                    row['TOTAL'] = total.size;
+                    return row;
+                }).sort((a, b) => b['TOTAL'] - a['TOTAL']);
+
+                return {
+                    type: 'pivot',
+                    title: 'Pacientes por Principio Activo por Años',
+                    data: results,
+                    years: years
+                };
+            };
+
+            const calculatePatientsByActiveIngredientByQuarter = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && 
+                    row['Id'] && 
+                    row['Descripción Principio Activo']
+                );
+
+                const paData = {};
+                
+                validData.forEach(row => {
+                    const pa = row['Descripción Principio Activo'];
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const quarter = Math.floor(date.getMonth() / 3) + 1;
+                    const key = `${year}-Q${quarter}`;
+                    
+                    if (!paData[pa]) {
+                        paData[pa] = {};
+                    }
+                    if (!paData[pa][key]) {
+                        paData[pa][key] = new Set();
+                    }
+                    
+                    paData[pa][key].add(row['Id']);
+                });
+
+                const quarters = [...new Set(validData.map(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const quarter = Math.floor(date.getMonth() / 3) + 1;
+                    return `${year}-Q${quarter}`;
+                }))].sort();
+
+                const results = Object.keys(paData).map(pa => {
+                    const row = { 'Principio Activo': pa };
+                    let total = new Set();
+                    
+                    quarters.forEach(quarter => {
+                        if (paData[pa][quarter]) {
+                            row[quarter] = paData[pa][quarter].size;
+                            paData[pa][quarter].forEach(id => total.add(id));
+                        } else {
+                            row[quarter] = 0;
+                        }
+                    });
+                    
+                    row['TOTAL'] = total.size;
+                    return row;
+                }).sort((a, b) => b['TOTAL'] - a['TOTAL']);
+
+                return {
+                    type: 'pivot',
+                    title: 'Pacientes por Principio Activo por Trimestres',
+                    data: results,
+                    periods: quarters
+                };
+            };
+
+            const calculatePatientsByActiveIngredientByMonth = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && 
+                    row['Id'] && 
+                    row['Descripción Principio Activo']
+                );
+
+                const paData = {};
+                
+                validData.forEach(row => {
+                    const pa = row['Descripción Principio Activo'];
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = date.getMonth() + 1;
+                    const key = `${year}-${String(month).padStart(2, '0')}`;
+                    
+                    if (!paData[pa]) {
+                        paData[pa] = {};
+                    }
+                    if (!paData[pa][key]) {
+                        paData[pa][key] = new Set();
+                    }
+                    
+                    paData[pa][key].add(row['Id']);
+                });
+
+                const months = [...new Set(validData.map(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = date.getMonth() + 1;
+                    return `${year}-${String(month).padStart(2, '0')}`;
+                }))].sort();
+
+                const results = Object.keys(paData).map(pa => {
+                    const row = { 'Principio Activo': pa };
+                    let total = new Set();
+                    
+                    months.forEach(month => {
+                        if (paData[pa][month]) {
+                            row[month] = paData[pa][month].size;
+                            paData[pa][month].forEach(id => total.add(id));
+                        } else {
+                            row[month] = 0;
+                        }
+                    });
+                    
+                    row['TOTAL'] = total.size;
+                    return row;
+                }).sort((a, b) => b['TOTAL'] - a['TOTAL']);
+
+                return {
+                    type: 'pivot',
+                    title: 'Pacientes por Principio Activo por Meses',
+                    data: results,
+                    periods: months
+                };
+            };
+
+            const calculateBiosimilarPatientsByYear = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && 
+                    row['Id'] && 
+                    row['Descripción Producto Dispensado']
+                );
+
+                // Filtrar solo biosimilares
+                const biosimilarData = validData.filter(row => {
+                    const producto = row['Descripción Producto Dispensado'].toUpperCase();
+                    return BIOSIMILARES.some(bio => producto.includes(bio));
+                });
+
+                const bioData = {};
+                
+                biosimilarData.forEach(row => {
+                    const producto = row['Descripción Producto Dispensado'];
+                    const year = row['Fecha Dispensación'].getFullYear();
+                    
+                    if (!bioData[producto]) {
+                        bioData[producto] = {};
+                    }
+                    if (!bioData[producto][year]) {
+                        bioData[producto][year] = new Set();
+                    }
+                    
+                    bioData[producto][year].add(row['Id']);
+                });
+
+                const years = [...new Set(biosimilarData.map(row => 
+                    row['Fecha Dispensación'].getFullYear()
+                ))].sort();
+
+                const results = Object.keys(bioData).map(producto => {
+                    const row = { 'Biosimilar': producto };
+                    let total = new Set();
+                    
+                    years.forEach(year => {
+                        if (bioData[producto][year]) {
+                            row[year] = bioData[producto][year].size;
+                            bioData[producto][year].forEach(id => total.add(id));
+                        } else {
+                            row[year] = 0;
+                        }
+                    });
+                    
+                    row['TOTAL'] = total.size;
+                    return row;
+                }).sort((a, b) => b['TOTAL'] - a['TOTAL']);
+
+                return {
+                    type: 'pivot',
+                    title: 'Pacientes con Biosimilares por Años',
+                    data: results,
+                    years: years
+                };
+            };
+
+            const calculateBiosimilarPatientsByQuarter = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && 
+                    row['Id'] && 
+                    row['Descripción Producto Dispensado']
+                );
+
+                const biosimilarData = validData.filter(row => {
+                    const producto = row['Descripción Producto Dispensado'].toUpperCase();
+                    return BIOSIMILARES.some(bio => producto.includes(bio));
+                });
+
+                const bioData = {};
+                
+                biosimilarData.forEach(row => {
+                    const producto = row['Descripción Producto Dispensado'];
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const quarter = Math.floor(date.getMonth() / 3) + 1;
+                    const key = `${year}-Q${quarter}`;
+                    
+                    if (!bioData[producto]) {
+                        bioData[producto] = {};
+                    }
+                    if (!bioData[producto][key]) {
+                        bioData[producto][key] = new Set();
+                    }
+                    
+                    bioData[producto][key].add(row['Id']);
+                });
+
+                const quarters = [...new Set(biosimilarData.map(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const quarter = Math.floor(date.getMonth() / 3) + 1;
+                    return `${year}-Q${quarter}`;
+                }))].sort();
+
+                const results = Object.keys(bioData).map(producto => {
+                    const row = { 'Biosimilar': producto };
+                    let total = new Set();
+                    
+                    quarters.forEach(quarter => {
+                        if (bioData[producto][quarter]) {
+                            row[quarter] = bioData[producto][quarter].size;
+                            bioData[producto][quarter].forEach(id => total.add(id));
+                        } else {
+                            row[quarter] = 0;
+                        }
+                    });
+                    
+                    row['TOTAL'] = total.size;
+                    return row;
+                }).sort((a, b) => b['TOTAL'] - a['TOTAL']);
+
+                return {
+                    type: 'pivot',
+                    title: 'Pacientes con Biosimilares por Trimestres',
+                    data: results,
+                    periods: quarters
+                };
+            };
+
+            const calculateBiosimilarPatientsByMonth = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && 
+                    row['Id'] && 
+                    row['Descripción Producto Dispensado']
+                );
+
+                const biosimilarData = validData.filter(row => {
+                    const producto = row['Descripción Producto Dispensado'].toUpperCase();
+                    return BIOSIMILARES.some(bio => producto.includes(bio));
+                });
+
+                const bioData = {};
+                
+                biosimilarData.forEach(row => {
+                    const producto = row['Descripción Producto Dispensado'];
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = date.getMonth() + 1;
+                    const key = `${year}-${String(month).padStart(2, '0')}`;
+                    
+                    if (!bioData[producto]) {
+                        bioData[producto] = {};
+                    }
+                    if (!bioData[producto][key]) {
+                        bioData[producto][key] = new Set();
+                    }
+                    
+                    bioData[producto][key].add(row['Id']);
+                });
+
+                const months = [...new Set(biosimilarData.map(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = date.getMonth() + 1;
+                    return `${year}-${String(month).padStart(2, '0')}`;
+                }))].sort();
+
+                const results = Object.keys(bioData).map(producto => {
+                    const row = { 'Biosimilar': producto };
+                    let total = new Set();
+                    
+                    months.forEach(month => {
+                        if (bioData[producto][month]) {
+                            row[month] = bioData[producto][month].size;
+                            bioData[producto][month].forEach(id => total.add(id));
+                        } else {
+                            row[month] = 0;
+                        }
+                    });
+                    
+                    row['TOTAL'] = total.size;
+                    return row;
+                }).sort((a, b) => b['TOTAL'] - a['TOTAL']);
+
+                return {
+                    type: 'pivot',
+                    title: 'Pacientes con Biosimilares por Meses',
+                    data: results,
+                    periods: months
+                };
+            };
+
+            const calculateUnitsAndCostByProductByYear = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && 
+                    row['Descripción Producto Dispensado']
+                );
+
+                const productData = {};
+                
+                validData.forEach(row => {
+                    let producto = row['Descripción Producto Dispensado'];
+                    
+                    // Aplicar agrupaciones especiales
+                    let grouped = false;
+                    for (const agrupacion of AGRUPACIONES_PRODUCTOS) {
+                        if (producto.includes(agrupacion)) {
+                            producto = agrupacion;
+                            grouped = true;
+                            break;
+                        }
+                    }
+                    
+                    const year = row['Fecha Dispensación'].getFullYear();
+                    
+                    if (!productData[producto]) {
+                        productData[producto] = {};
+                    }
+                    if (!productData[producto][year]) {
+                        productData[producto][year] = {
+                            unidades: 0,
+                            coste: 0
+                        };
+                    }
+                    
+                    productData[producto][year].unidades += parseInt(row['Cantidad']) || 0;
+                    productData[producto][year].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const years = [...new Set(validData.map(row => 
+                    row['Fecha Dispensación'].getFullYear()
+                ))].sort();
+
+                const results = Object.keys(productData).map(producto => {
+                    const row = { 'Producto': producto };
+                    let totalUnidades = 0;
+                    let totalCoste = 0;
+                    
+                    years.forEach(year => {
+                        if (productData[producto][year]) {
+                            row[`${year} Unidades`] = productData[producto][year].unidades;
+                            row[`${year} Coste`] = productData[producto][year].coste.toFixed(2);
+                            totalUnidades += productData[producto][year].unidades;
+                            totalCoste += productData[producto][year].coste;
+                        } else {
+                            row[`${year} Unidades`] = 0;
+                            row[`${year} Coste`] = '0.00';
+                        }
+                    });
+                    
+                    row['TOTAL Unidades'] = totalUnidades;
+                    row['TOTAL Coste'] = totalCoste.toFixed(2);
+                    return row;
+                }).sort((a, b) => b['TOTAL Coste'] - a['TOTAL Coste']);
+
+                return {
+                    type: 'product',
+                    title: 'Unidades y Coste por Medicamento por Años',
+                    data: results,
+                    years: years
+                };
+            };
+
+            const calculateUnitsAndCostByProductByQuarter = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && 
+                    row['Descripción Producto Dispensado']
+                );
+
+                const productData = {};
+                
+                validData.forEach(row => {
+                    let producto = row['Descripción Producto Dispensado'];
+                    
+                    for (const agrupacion of AGRUPACIONES_PRODUCTOS) {
+                        if (producto.includes(agrupacion)) {
+                            producto = agrupacion;
+                            break;
+                        }
+                    }
+                    
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const quarter = Math.floor(date.getMonth() / 3) + 1;
+                    const key = `${year}-Q${quarter}`;
+                    
+                    if (!productData[producto]) {
+                        productData[producto] = {};
+                    }
+                    if (!productData[producto][key]) {
+                        productData[producto][key] = {
+                            unidades: 0,
+                            coste: 0
+                        };
+                    }
+                    
+                    productData[producto][key].unidades += parseInt(row['Cantidad']) || 0;
+                    productData[producto][key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const quarters = [...new Set(validData.map(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const quarter = Math.floor(date.getMonth() / 3) + 1;
+                    return `${year}-Q${quarter}`;
+                }))].sort();
+
+                const results = Object.keys(productData).map(producto => {
+                    const row = { 'Producto': producto };
+                    let totalUnidades = 0;
+                    let totalCoste = 0;
+                    
+                    quarters.forEach(quarter => {
+                        if (productData[producto][quarter]) {
+                            row[`${quarter} Unidades`] = productData[producto][quarter].unidades;
+                            row[`${quarter} Coste`] = productData[producto][quarter].coste.toFixed(2);
+                            totalUnidades += productData[producto][quarter].unidades;
+                            totalCoste += productData[producto][quarter].coste;
+                        } else {
+                            row[`${quarter} Unidades`] = 0;
+                            row[`${quarter} Coste`] = '0.00';
+                        }
+                    });
+                    
+                    row['TOTAL Unidades'] = totalUnidades;
+                    row['TOTAL Coste'] = totalCoste.toFixed(2);
+                    return row;
+                }).sort((a, b) => b['TOTAL Coste'] - a['TOTAL Coste']);
+
+                return {
+                    type: 'product',
+                    title: 'Unidades y Coste por Medicamento por Trimestres',
+                    data: results,
+                    periods: quarters
+                };
+            };
+
+            const calculateUnitsAndCostByProductByMonth = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && 
+                    row['Descripción Producto Dispensado']
+                );
+
+                const productData = {};
+                
+                validData.forEach(row => {
+                    let producto = row['Descripción Producto Dispensado'];
+                    
+                    for (const agrupacion of AGRUPACIONES_PRODUCTOS) {
+                        if (producto.includes(agrupacion)) {
+                            producto = agrupacion;
+                            break;
+                        }
+                    }
+                    
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = date.getMonth() + 1;
+                    const key = `${year}-${String(month).padStart(2, '0')}`;
+                    
+                    if (!productData[producto]) {
+                        productData[producto] = {};
+                    }
+                    if (!productData[producto][key]) {
+                        productData[producto][key] = {
+                            unidades: 0,
+                            coste: 0
+                        };
+                    }
+                    
+                    productData[producto][key].unidades += parseInt(row['Cantidad']) || 0;
+                    productData[producto][key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const months = [...new Set(validData.map(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = date.getMonth() + 1;
+                    return `${year}-${String(month).padStart(2, '0')}`;
+                }))].sort();
+
+                const results = Object.keys(productData).map(producto => {
+                    const row = { 'Producto': producto };
+                    let totalUnidades = 0;
+                    let totalCoste = 0;
+                    
+                    months.forEach(month => {
+                        if (productData[producto][month]) {
+                            row[`${month} Unidades`] = productData[producto][month].unidades;
+                            row[`${month} Coste`] = productData[producto][month].coste.toFixed(2);
+                            totalUnidades += productData[producto][month].unidades;
+                            totalCoste += productData[producto][month].coste;
+                        } else {
+                            row[`${month} Unidades`] = 0;
+                            row[`${month} Coste`] = '0.00';
+                        }
+                    });
+                    
+                    row['TOTAL Unidades'] = totalUnidades;
+                    row['TOTAL Coste'] = totalCoste.toFixed(2);
+                    return row;
+                }).sort((a, b) => b['TOTAL Coste'] - a['TOTAL Coste']);
+
+                return {
+                    type: 'product',
+                    title: 'Unidades y Coste por Medicamento por Meses',
+                    data: results,
+                    periods: months
+                };
+            };
+
+            const exportToExcel = () => {
+                if (!results || !results.data) return;
+
+                const ws = XLSX.utils.json_to_sheet(results.data);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, "Resultados");
+                XLSX.writeFile(wb, `${results.title.replace(/\s+/g, '_')}.xlsx`);
+            };
+
+            const exportToCSV = () => {
+                if (!results || !results.data) return;
+
+                const ws = XLSX.utils.json_to_sheet(results.data);
+                const csv = XLSX.utils.sheet_to_csv(ws);
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `${results.title.replace(/\s+/g, '_')}.csv`;
+                a.click();
+            };
+
+            return (
+                <div className="container">
+                    <div className="header">
+                        <h1>🏥 Analizador de dispensaciones en IMID</h1>
+                        <p>Sistema de indicadores cuantitativos para farmacia hospitalaria</p>
+                    </div>
+
+                    <div className="main-content">
+                        <div 
+                            className={`upload-section ${data ? 'file-loaded' : ''} ${dragOver ? 'dragover' : ''}`}
+                            onClick={() => fileInputRef.current?.click()}
+                            onDrop={handleDrop}
+                            onDragOver={handleDragOver}
+                            onDragLeave={handleDragLeave}
+                        >
+                            <div className="upload-icon">
+                                {data ? '✅' : '📁'}
+                            </div>
+                            <h2>{data ? `Archivo cargado: ${fileName}` : 'Cargar archivo Excel'}</h2>
+                            <p>
+                                {data 
+                                    ? `${data.length.toLocaleString()} dispensaciones cargadas` 
+                                    : 'Arrastra y suelta el archivo o haz clic para seleccionar'}
+                            </p>
+                            <input 
+                                ref={fileInputRef}
+                                type="file" 
+                                accept=".xlsx,.xls"
+                                onChange={(e) => handleFileUpload(e.target.files[0])}
+                            />
+                        </div>
+
+                        {data && (
+                            <div className="alert alert-success">
+                                ✅ Archivo validado correctamente. Selecciona una opción del menú para continuar.
+                            </div>
+                        )}
+
+                        {data && (
+                            <div className="filters-section">
+                                <h3>🔍 Filtros de datos</h3>
+                                <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px'}}>
+                                    <div className="filter-group">
+                                        <label>Año</label>
+                                        <select 
+                                            value={filters.year} 
+                                            onChange={(e) => setFilters({...filters, year: e.target.value})}
+                                        >
+                                            <option value="">Todos los años</option>
+                                            {filterOptions.years.map(year => (
+                                                <option key={year} value={year}>{year}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+            
+                                    <div className="filter-group">
+                                        <label>Servicio prescriptor</label>
+                                        <select 
+                                            value={filters.service} 
+                                            onChange={(e) => setFilters({...filters, service: e.target.value})}
+                                        >
+                                            <option value="">Todos los servicios</option>
+                                            {filterOptions.services.map(service => (
+                                                <option key={service} value={service}>{service}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div className="filter-group">
+                                        <label>Patología</label>
+                                        <select 
+                                            value={filters.pathology} 
+                                            onChange={(e) => setFilters({...filters, pathology: e.target.value})}
+                                        >
+                                            <option value="">Todas las patologías</option>
+                                            {filterOptions.pathologies.map(pathology => (
+                                                <option key={pathology} value={pathology}>{pathology}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+            
+                                    <div className="filter-group">
+                                        <label>Principio activo</label>
+                                        <select 
+                                            value={filters.activeIngredient} 
+                                            onChange={(e) => setFilters({...filters, activeIngredient: e.target.value})}
+                                        >
+                                            <option value="">Todos los principios activos</option>
+                                            {filterOptions.activeIngredients.map(pa => (
+                                                <option key={pa} value={pa}>{pa}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+        
+                                {(filters.year || filters.service || filters.pathology || filters.activeIngredient) && (
+                                    <div style={{marginTop: '15px', padding: '10px', background: '#fff3cd', borderRadius: '8px', color: '#856404'}}>
+                                        ⚠️ Filtros activos: Se procesarán {applyFilters()?.length || 0} de {data.length} registros
+                                        <button 
+                                            style={{marginLeft: '15px', padding: '5px 15px', background: '#667eea', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+                                            onClick={() => setFilters({ year: '', service: '', pathology: '', activeIngredient: '' })}
+                                        >
+                                            Limpiar filtros
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                        
+                        {/* === TOGGLE DE VISTA === */}
+                        <div className="view-toggle">
+                            <button 
+                                className={`toggle-btn ${viewMode === 'dashboard' ? 'active' : ''}`}
+                                onClick={() => setViewMode('dashboard')}
+                            >
+                                📊 Dashboard ejecutivo
+                            </button>
+                            <button 
+                                className={`toggle-btn ${viewMode === 'analysis' ? 'active' : ''}`}
+                                onClick={() => setViewMode('analysis')}
+                            >
+                                📋 Análisis detallado
+                            </button>
+                        </div>
+
+                        {/* === VISTA DASHBOARD === */}
+                        {viewMode === 'dashboard' && (
+                            <>
+                                <div className="alert alert-info" style={{marginBottom: '20px'}}>
+                                    ℹ️ <strong>Dashboard ejecutivo:</strong> Vista general con indicadores clave y gráficos interactivos.
+                                </div>
+                                
+                                <div className="dashboard-kpis">
+                                    {(() => {
+                                        const totals = calculateGlobalTotals(applyFilters() || data);
+                                        return (
+                                            <>
+                                                <div className="kpi-card primary">
+                                                    <div className="kpi-label">Total Pacientes</div>
+                                                    <div className="kpi-value">{totals.pacientes.toLocaleString('es-ES')}</div>
+                                                    <div className="kpi-subtitle">Pacientes únicos</div>
+                                                </div>
+                                                <div className="kpi-card success">
+                                                    <div className="kpi-label">Total Visitas</div>
+                                                    <div className="kpi-value">{totals.visitas.toLocaleString('es-ES')}</div>
+                                                    <div className="kpi-subtitle">Visitas registradas</div>
+                                                </div>
+                                                <div className="kpi-card warning">
+                                                    <div className="kpi-label">Dispensaciones</div>
+                                                    <div className="kpi-value">{totals.dispensaciones.toLocaleString('es-ES')}</div>
+                                                    <div className="kpi-subtitle">Líneas dispensadas</div>
+                                                </div>
+                                                <div className="kpi-card info">
+                                                    <div className="kpi-label">Coste Total</div>
+                                                    <div className="kpi-value">€{(totals.coste / 1000).toFixed(0)}K</div>
+                                                    <div className="kpi-subtitle">€{totals.coste.toLocaleString('es-ES', {minimumFractionDigits: 2})}</div>
+                                                </div>
+                                            </>
+                                        );
+                                    })()}
+                                </div>
+                                
+                                <div className="dashboard-charts">
+                                    <div className="chart-card full-width">
+                                        <div className="chart-title">📈 Evolución temporal</div>
+                                        <canvas id="evolutionChart"></canvas>
+                                    </div>
+                                    
+                                    <div className="chart-card">
+                                        <div className="chart-title">💊 Top principios activos</div>
+                                        <canvas id="topPAChart"></canvas>
+                                    </div>
+                                    
+                                    <div className="chart-card">
+                                        <div className="chart-title">🏥 Distribución por servicio</div>
+                                        <canvas id="serviceChart"></canvas>
+                                    </div>
+                                </div>
+                                
+                                <div className="dashboard-ranking">
+                                    <div className="chart-title">🏆 Top 5 principios activos por pacientes</div>
+                                    {calculateTopPrincipiosActivos(applyFilters() || data, 5).map((item, index) => (
+                                        <div key={index} className="ranking-item">
+                                            <div className="ranking-rank">{index + 1}</div>
+                                            <div className="ranking-name">{item.name}</div>
+                                            <div className="ranking-value">{item.pacientes} pacientes</div>
+                                        </div>
+                                    ))}
+                                </div>
+                                
+                                <div className="dashboard-charts">
+                                    <div className="chart-card full-width">
+                                        <div className="chart-title">🔄 Penetración de biosimilares</div>
+                                        <canvas id="biosimilarChart"></canvas>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+
+                        {/* === VISTA ANÁLISIS === */}
+                        {viewMode === 'analysis' && (
+                            <>
+                        <h2 style={{marginBottom: '20px', color: '#667eea'}}>📊 Menú principal de indicadores</h2>
+                        
+                        <div className="menu-grid">
+                            <button className="menu-button" onClick={() => processOption(1)} disabled={!data}>
+                                <span className="number">1</span>
+                                Totales globales
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(2)} disabled={!data}>
+                                <span className="number">2</span>
+                                Indicadores por años
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(3)} disabled={!data}>
+                                <span className="number">3</span>
+                                Indicadores por trimestres
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(4)} disabled={!data}>
+                                <span className="number">4</span>
+                                Indicadores por meses
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(5)} disabled={!data}>
+                                <span className="number">5</span>
+                                Pacientes por principio activo (años)
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(6)} disabled={!data}>
+                                <span className="number">6</span>
+                                Pacientes por principio activo (trimestres)
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(7)} disabled={!data}>
+                                <span className="number">7</span>
+                                Pacientes por principio activo (meses)
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(8)} disabled={!data}>
+                                <span className="number">8</span>
+                                Biosimilares por años
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(9)} disabled={!data}>
+                                <span className="number">9</span>
+                                Biosimilares por trimestres
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(10)} disabled={!data}>
+                                <span className="number">10</span>
+                                Biosimilares por meses
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(11)} disabled={!data}>
+                                <span className="number">11</span>
+                                Unidades y coste por medicamento (años)
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(12)} disabled={!data}>
+                                <span className="number">12</span>
+                                Unidades y coste por medicamento (trimestres)
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(13)} disabled={!data}>
+                                <span className="number">13</span>
+                                Unidades y coste por medicamento (meses)
+                            </button>
+                        </div>
+
+                        {loading && (
+                            <div className="loading">
+                                <div className="spinner"></div>
+                                <p>Procesando datos...</p>
+                            </div>
+                        )}
+
+                        {results && !loading && (
+                            <div className="results-section">
+                                <div className="results-header">
+                                    <h2>{results.title}</h2>
+                                    <div className="export-buttons">
+                                        <button className="export-btn" onClick={exportToExcel}>
+                                            📊 Exportar Excel
+                                        </button>
+                                        <button className="export-btn" onClick={exportToCSV}>
+                                            📄 Exportar CSV
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                {/* Gráfico del análisis */}
+                                <div className="analysis-chart-container">
+                                    <canvas id="analysisChart"></canvas>
+                                </div>
+                                
+                                <div className="table-container">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                {Object.keys(results.data[0] || {}).map(key => (
+                                                    <th key={key}>{key}</th>
+                                                ))}
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {results.data.map((row, idx) => (
+                                                <tr key={idx}>
+                                                    {Object.entries(row).map(([key, value], i) => {
+                                                        const isFirstColumn = i === 0;
+                                                        const isNumber = typeof value === 'number' || 
+                                                                        (!isNaN(parseFloat(value)) && isFinite(value) && key !== 'Periodo');
+                
+                                                        return (
+                                                            <td 
+                                                                key={i} 
+                                                                style={{
+                                                                    textAlign: isFirstColumn ? 'left' : 'right',
+                                                                    fontWeight: isNumber ? '600' : 'normal'
+                                                                }}
+                                                            >
+                                                                {isNumber && !isFirstColumn
+                                                                    ? parseFloat(value).toLocaleString('es-ES', {
+                                                                        minimumFractionDigits: key.includes('Coste') ? 2 : 0,
+                                                                        maximumFractionDigits: key.includes('Coste') ? 2 : 0
+                                                                    })
+                                                                    : value}
+                                                            </td>
+                                                        );
+                                                    })}
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                            </>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
