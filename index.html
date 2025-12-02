@@ -9,6 +9,8 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
         * {
             margin: 0;
@@ -563,8 +565,10 @@
             const [results, setResults] = useState(null);
             const [selectedOption, setSelectedOption] = useState(null);
             const [fileName, setFileName] = useState('');
-            const [viewMode, setViewMode] = useState('analysis'); // 'dashboard' o 'analysis'
+            const [viewMode, setViewMode] = useState('analysis'); // 'dashboard', 'analysis' o 'reports'
             const [dragOver, setDragOver] = useState(false);
+            const [reportLoading, setReportLoading] = useState(false);
+            const [reportGenerated, setReportGenerated] = useState(false);
             const [filters, setFilters] = useState({
                 year: '',
                 service: '',
@@ -617,6 +621,15 @@
                                         data: evolutionData.visitas,
                                         borderColor: '#84fab0',
                                         backgroundColor: 'rgba(132, 250, 176, 0.1)',
+                                        tension: 0.4,
+                                        fill: true,
+                                        borderWidth: 3
+                                    },
+                                    {
+                                        label: 'Dispensaciones',
+                                        data: evolutionData.dispensaciones,
+                                        borderColor: '#fcb69f',
+                                        backgroundColor: 'rgba(252, 182, 159, 0.1)',
                                         tension: 0.4,
                                         fill: true,
                                         borderWidth: 3
@@ -696,7 +709,7 @@
                             data: {
                                 labels: biosimData.years,
                                 datasets: [{
-                                    label: 'Penetración (%)',
+                                    label: '% Pacientes con biosimilares',
                                     data: biosimData.percentages,
                                     borderColor: '#84fab0',
                                     backgroundColor: 'rgba(132, 250, 176, 0.3)',
@@ -998,6 +1011,44 @@
                         }
                     });
                 }
+                else if (results.type === 'cost_per_patient') {
+                    const labels = results.data.map(row => row.Periodo);
+                    const costPerPatient = results.data.map(row => parseFloat(row['Coste/Paciente']));
+                    
+                    window.analysisChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: labels,
+                            datasets: [{
+                                label: 'Coste/Paciente (€)',
+                                data: costPerPatient,
+                                backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                                borderColor: '#667eea',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                title: { display: true, text: results.title },
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        callback: function(value) {
+                                            return '€' + value.toLocaleString('es-ES', {
+                                                minimumFractionDigits: 2,
+                                                maximumFractionDigits: 2
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
             };
 
 
@@ -1084,31 +1135,1448 @@
             };
             
             const calculateBiosimilarPenetration = (dataToProcess) => {
+                // Mapeo de biosimilares a sus principios activos
+                const BIOSIMILAR_TO_PA = {
+                    'HYRIMOZ': 'ADALIMUMAB',
+                    'IMRALDI': 'ADALIMUMAB',
+                    'IDACIO': 'ADALIMUMAB',
+                    'YUFLIMA': 'ADALIMUMAB',
+                    'BENEPALI': 'ETANERCEPT',
+                    'ERELZI': 'ETANERCEPT',
+                    'REMSIMA': 'INFLIXIMAB',
+                    'TYENNE': 'TOCILIZUMAB',
+                    'AVTOZMA': 'TOCILIZUMAB',
+                    'UZPRUVO': 'USTEKINUMAB',
+                    'STEQEYMA': 'USTEKINUMAB',
+                    'PYZCHYVA': 'USTEKINUMAB',
+                    'OMLYCLO': 'OMALIZUMAB'
+                };
+
+                // PA que tienen biosimilar disponible
+                const PA_WITH_BIOSIMILAR = ['ADALIMUMAB', 'ETANERCEPT', 'INFLIXIMAB', 'TOCILIZUMAB', 'USTEKINUMAB', 'OMALIZUMAB'];
+
                 const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && row['Descripción Producto Dispensado']
+                    row['Fecha Dispensación'] && 
+                    row['Descripción Producto Dispensado'] && 
+                    row['Id'] &&
+                    row['Descripción Principio Activo']
                 );
 
                 const yearData = {};
                 validData.forEach(row => {
                     const year = row['Fecha Dispensación'].getFullYear();
                     const producto = row['Descripción Producto Dispensado'].toUpperCase();
-                    const isBio = BIOSIMILARES.some(bio => producto.includes(bio));
+                    const pa = row['Descripción Principio Activo'].toUpperCase();
+                    const pacienteId = row['Id'];
+                    
+                    // Verificar si el PA tiene biosimilar disponible
+                    const paHasBiosimilar = PA_WITH_BIOSIMILAR.some(p => pa.includes(p));
+                    
+                    if (!paHasBiosimilar) return; // Solo considerar PA con biosimilar disponible
                     
                     if (!yearData[year]) {
-                        yearData[year] = { total: 0, biosimilares: 0 };
+                        yearData[year] = { 
+                            pacientesTotal: new Set(), 
+                            pacientesBiosimilar: new Set() 
+                        };
                     }
-                    yearData[year].total++;
-                    if (isBio) yearData[year].biosimilares++;
+                    
+                    // Añadir al total de pacientes con PA que tiene biosimilar
+                    yearData[year].pacientesTotal.add(pacienteId);
+                    
+                    // Verificar si el producto es biosimilar
+                    const isBio = BIOSIMILARES.some(bio => producto.includes(bio));
+                    if (isBio) {
+                        yearData[year].pacientesBiosimilar.add(pacienteId);
+                    }
                 });
 
                 const years = Object.keys(yearData).sort();
                 return {
                     years,
-                    percentages: years.map(y => 
-                        (yearData[y].biosimilares / yearData[y].total * 100).toFixed(1)
-                    )
+                    percentages: years.map(y => {
+                        const total = yearData[y].pacientesTotal.size;
+                        const biosim = yearData[y].pacientesBiosimilar.size;
+                        return total > 0 ? (biosim / total * 100).toFixed(1) : '0.0';
+                    })
                 };
             };
+            
+            const calculateServiceDistribution = (dataToProcess) => {
+                console.log('🔍 Calculando distribución');
+                console.log('Total filas:', dataToProcess.length);
+                
+                if (dataToProcess.length === 0) {
+                    return { services: [] };
+                }
+                
+                // Detectar columna (Patología primero, luego Servicio Prescriptor)
+                const firstRow = dataToProcess[0];
+                let column = null;
+                
+                const possibleColumns = [
+                    'Servicio Prescriptor', 'SERVICIO_PRESCRIPTOR',
+                    'SERVICIO', 'Servicio', 'servicio',
+                    'Patología', 'PATOLOGIA', 'patologia'
+                ];
+                
+                for (let col of possibleColumns) {
+                    if (firstRow.hasOwnProperty(col)) {
+                        column = col;
+                        console.log('✅ Usando columna:', column);
+                        break;
+                    }
+                }
+                
+                if (!column) {
+                    console.error('❌ No se encontró columna');
+                    return { services: [] };
+                }
+                
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row[column] && row['Id']
+                );
+                
+                console.log('Filas válidas:', validData.length);
+                
+                // Contar pacientes únicos
+                const categoryPatients = {};
+                validData.forEach(row => {
+                    const cat = row[column];
+                    if (cat) {
+                        if (!categoryPatients[cat]) {
+                            categoryPatients[cat] = new Set();
+                        }
+                        categoryPatients[cat].add(row['Id']);
+                    }
+                });
+                
+                const services = Object.keys(categoryPatients)
+                    .map(cat => ({
+                        service: cat,
+                        count: categoryPatients[cat].size
+                    }))
+                    .sort((a, b) => b.count - a.count);
+                
+                console.log('📊 Total categorías:', services.length);
+                console.log('Top 3:', services.slice(0, 3));
+                
+                return { services };
+            };
+            
+                        const generateReport = async (reportType) => {
+                if (!data) {
+                    alert('Por favor, carga un archivo Excel primero');
+                    return;
+                }
+
+                setReportLoading(true);
+                setReportGenerated(false);
+
+                try {
+                    const dataToProcess = applyFilters() || data;
+                    
+                    switch(reportType) {
+                        case 1:
+                            await generateReport1(dataToProcess);
+                            break;
+                        case 2:
+                            await generateReport2(dataToProcess);
+                            break;
+                        case 3:
+                            await generateReport3(dataToProcess);
+                            break;
+                        default:
+                            break;
+                    }
+                    
+                    setReportLoading(false);
+                    setReportGenerated(true);
+                    setTimeout(() => setReportGenerated(false), 5000);
+                } catch (error) {
+                    console.error('Error generando informe:', error);
+                    alert('Error al generar el informe: ' + error.message);
+                    setReportLoading(false);
+                }
+            };
+            
+                        const generateReport1 = async (dataToProcess) => {
+                console.log('📄 Iniciando generación Informe 1...');
+                
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const pageWidth = 210;
+                const pageHeight = 297;
+                const margin = 15;
+                
+                // --- ENCABEZADO ---
+                pdf.setFontSize(16);
+                pdf.setFont('helvetica', 'bold');
+                pdf.text('Indicadores IMID. Evolución anual', pageWidth / 2, 15, { align: 'center' });
+                
+                // Hospital
+                pdf.setFontSize(10);
+                pdf.setFont('helvetica', 'normal');
+                pdf.text('Hospital Universitario i Politécnico La Fe. Valencia', pageWidth / 2, 22, { align: 'center' });
+                
+                // Fecha
+                const fecha = new Date().toLocaleDateString('es-ES', { 
+                    year: 'numeric', month: 'long', day: 'numeric' 
+                });
+                pdf.text(`Fecha del informe: ${fecha}`, margin, 30);
+                
+                // Filtros
+                let yPos = 35;
+                const activeFilters = [];
+                if (filters.year) activeFilters.push(`Año: ${filters.year}`);
+                if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
+                if (filters.pathology) activeFilters.push(`Diagnóstico: ${filters.pathology}`);
+                if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                
+                if (activeFilters.length > 0) {
+                    pdf.setFontSize(9);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.text('Filtros aplicados:', margin, yPos);
+                    pdf.setFont('helvetica', 'normal');
+                    activeFilters.forEach((filter, i) => {
+                        pdf.text(filter, margin + 35, yPos + (i * 4));
+                    });
+                    yPos += (activeFilters.length * 4) + 3;
+                } else {
+                    pdf.setFontSize(9);
+                    pdf.text('Período: Todos los datos disponibles', margin, yPos);
+                    yPos += 5;
+                }
+                
+                // --- DATOS GLOBALES ---
+                const totals = calculateGlobalTotals(dataToProcess);
+                pdf.setFontSize(9);
+                pdf.setFont('helvetica', 'bold');
+                pdf.text('Indicadores globales:', margin, yPos);
+                yPos += 5;
+                
+                pdf.setFont('helvetica', 'normal');
+                const cols = [
+                    `Pacientes: ${totals.pacientes.toLocaleString('es-ES')}`,
+                    `Visitas: ${totals.visitas.toLocaleString('es-ES')}`,
+                    `Dispensaciones: ${totals.dispensaciones.toLocaleString('es-ES')}`,
+                    `Coste: €${totals.coste.toLocaleString('es-ES', {minimumFractionDigits: 2})}`
+                ];
+                
+                const colWidth = (pageWidth - 2 * margin) / 4;
+                cols.forEach((text, i) => {
+                    pdf.text(text, margin + (i * colWidth), yPos);
+                });
+                yPos += 8;
+                
+                console.log('📊 Generando gráficos...');
+                
+                // --- CREAR GRÁFICOS ---
+                const chartData = {
+                    yearData: calculateByYears(dataToProcess),
+                    paData: calculatePatientsByActiveIngredientByYear(dataToProcess),
+                    bioData: calculateBiosimilarPatientsByYear(dataToProcess),
+                    cpData: calculateCostPerPatientByYear(dataToProcess),
+                    prodData: calculateUnitsAndCostByProductByYear(dataToProcess)
+                };
+                
+                // Crear canvas temporal para gráficos
+                const tempDiv = document.createElement('div');
+                tempDiv.style.position = 'fixed';
+                tempDiv.style.left = '-9999px';
+                tempDiv.style.width = '1200px';
+                tempDiv.style.height = '900px';
+                document.body.appendChild(tempDiv);
+                
+                try {
+                    // Dimensiones de gráficos (2 columnas x 3 filas)
+                    const chartWidth = 85; // mm (más ancho)
+                    const chartHeight = 55; // mm (más alto)
+                    const chartMarginX = 10;
+                    const chartMarginY = 5;
+                    
+                    // GRÁFICO 1: Indicadores por año
+                    console.log('Gráfico 1: Indicadores por año');
+                    const canvas1 = document.createElement('canvas');
+                    canvas1.width = 800;
+                    canvas1.height = 600;
+                    tempDiv.appendChild(canvas1);
+                    
+                    const chart1 = new Chart(canvas1, {
+                        type: 'line',
+                        data: {
+                            labels: chartData.yearData.data.map(r => r.Periodo),
+                            datasets: [
+                                {
+                                    label: 'Pacientes',
+                                    data: chartData.yearData.data.map(r => r.Pacientes),
+                                    borderColor: '#667eea',
+                                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                                    borderWidth: 3,
+                                    tension: 0.4,
+                                    fill: true
+                                },
+                                {
+                                    label: 'Visitas',
+                                    data: chartData.yearData.data.map(r => r.Visitas),
+                                    borderColor: '#84fab0',
+                                    backgroundColor: 'rgba(132, 250, 176, 0.1)',
+                                    borderWidth: 3,
+                                    tension: 0.4,
+                                    fill: true
+                                },
+                                {
+                                    label: 'Dispensaciones',
+                                    data: chartData.yearData.data.map(r => r.Dispensaciones),
+                                    borderColor: '#fcb69f',
+                                    backgroundColor: 'rgba(252, 182, 159, 0.1)',
+                                    borderWidth: 3,
+                                    tension: 0.4,
+                                    fill: true
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Indicadores por año', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 18 }, padding: 12, boxWidth: 15 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 18 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img1 = canvas1.toDataURL('image/png', 1.0);
+                    pdf.addImage(img1, 'PNG', margin, yPos, chartWidth, chartHeight);
+                    chart1.destroy();
+                    console.log('✅ Gráfico 1 añadido');
+                    
+                    // GRÁFICO 2: Pacientes por PA
+                    console.log('Gráfico 2: Pacientes por PA');
+                    const canvas2 = document.createElement('canvas');
+                    canvas2.width = 800;
+                    canvas2.height = 600;
+                    tempDiv.appendChild(canvas2);
+                    
+                    // Preparar datos PA
+                    const topPA = chartData.paData.data.slice(0, 8);
+                    const yearsPA = [];
+                    chartData.paData.data.forEach(row => {
+                        Object.keys(row).forEach(key => {
+                            if (key !== 'Principio Activo' && key !== 'TOTAL' && !yearsPA.includes(key)) {
+                                yearsPA.push(key);
+                            }
+                        });
+                    });
+                    yearsPA.sort();
+                    
+                    const colorsPA = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
+                    const datasetsPA = topPA.map((row, idx) => ({
+                        label: row['Principio Activo'].substring(0, 20),
+                        data: yearsPA.map(year => row[year] || 0),
+                        borderColor: colorsPA[idx],
+                        borderWidth: 2,
+                        tension: 0.4
+                    }));
+                    
+                    const chart2 = new Chart(canvas2, {
+                        type: 'line',
+                        data: { labels: yearsPA, datasets: datasetsPA },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Pacientes por PA (Top 8)', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 15 }, boxWidth: 15, padding: 10 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 18 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img2 = canvas2.toDataURL('image/png', 1.0);
+                    pdf.addImage(img2, 'PNG', margin + chartWidth + chartMarginX, yPos, chartWidth, chartHeight);
+                    chart2.destroy();
+                    console.log('✅ Gráfico 2 añadido');
+                    
+                    // GRÁFICO 3: Biosimilares
+                    console.log('Gráfico 3: Biosimilares');
+                    const canvas3 = document.createElement('canvas');
+                    canvas3.width = 800;
+                    canvas3.height = 600;
+                    tempDiv.appendChild(canvas3);
+                    
+                    const topBio = chartData.bioData.data.slice(0, 6);
+                    const yearsBio = [];
+                    chartData.bioData.data.forEach(row => {
+                        Object.keys(row).forEach(key => {
+                            if (key !== 'Biosimilar' && key !== 'TOTAL' && !yearsBio.includes(key)) {
+                                yearsBio.push(key);
+                            }
+                        });
+                    });
+                    yearsBio.sort();
+                    
+                    const colorsBio = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
+                    const datasetsBio = topBio.map((row, idx) => ({
+                        label: row.Biosimilar.substring(0, 20),
+                        data: yearsBio.map(year => row[year] || 0),
+                        borderColor: colorsBio[idx],
+                        borderWidth: 2,
+                        tension: 0.4
+                    }));
+                    
+                    const chart3 = new Chart(canvas3, {
+                        type: 'line',
+                        data: { labels: yearsBio, datasets: datasetsBio },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Pacientes con biosimilares (Top 6)', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 15 }, boxWidth: 15, padding: 10 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 18 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img3 = canvas3.toDataURL('image/png', 1.0);
+                    
+                    // Nueva fila (segunda fila, primera columna)
+                    let yPosRow2 = yPos + chartHeight + chartMarginY;
+                    pdf.addImage(img3, 'PNG', margin, yPosRow2, chartWidth, chartHeight);
+                    chart3.destroy();
+                    console.log('✅ Gráfico 3 añadido');
+                    
+                    // GRÁFICO 4: Coste total
+                    console.log('Gráfico 4: Coste total');
+                    const canvas4 = document.createElement('canvas');
+                    canvas4.width = 800;
+                    canvas4.height = 600;
+                    tempDiv.appendChild(canvas4);
+                    
+                    const chart4 = new Chart(canvas4, {
+                        type: 'bar',
+                        data: {
+                            labels: chartData.yearData.data.map(r => r.Periodo),
+                            datasets: [{
+                                label: 'Coste (€)',
+                                data: chartData.yearData.data.map(r => parseFloat(r.Coste)),
+                                backgroundColor: 'rgba(252, 182, 159, 0.8)',
+                                borderColor: '#fcb69f',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Coste total por años', font: { size: 22, weight: 'bold' } },
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 18 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img4 = canvas4.toDataURL('image/png', 1.0);
+                    pdf.addImage(img4, 'PNG', margin + chartWidth + chartMarginX, yPosRow2, chartWidth, chartHeight);
+                    chart4.destroy();
+                    console.log('✅ Gráfico 4 añadido');
+                    
+                    // Nueva fila (tercera fila, primera columna)
+                    let yPosRow3 = yPosRow2 + chartHeight + chartMarginY;
+                    
+                    // GRÁFICO 5: Coste/Paciente
+                    console.log('Gráfico 5: Coste/Paciente');
+                    const canvas5 = document.createElement('canvas');
+                    canvas5.width = 800;
+                    canvas5.height = 600;
+                    tempDiv.appendChild(canvas5);
+                    
+                    const chart5 = new Chart(canvas5, {
+                        type: 'bar',
+                        data: {
+                            labels: chartData.cpData.data.map(r => r.Periodo),
+                            datasets: [{
+                                label: 'Coste/Paciente (€)',
+                                data: chartData.cpData.data.map(r => parseFloat(r['Coste/Paciente'])),
+                                backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                                borderColor: '#667eea',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Coste/Paciente por años', font: { size: 22, weight: 'bold' } },
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 18 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img5 = canvas5.toDataURL('image/png', 1.0);
+                    pdf.addImage(img5, 'PNG', margin, yPosRow3, chartWidth, chartHeight);
+                    chart5.destroy();
+                    console.log('✅ Gráfico 5 añadido');
+                    
+                    // GRÁFICO 6: Top 10 medicamentos
+                    console.log('Gráfico 6: Top 10 medicamentos');
+                    const canvas6 = document.createElement('canvas');
+                    canvas6.width = 800;
+                    canvas6.height = 600;
+                    tempDiv.appendChild(canvas6);
+                    
+                    // Obtener años de productos
+                    const yearsProd = [];
+                    chartData.prodData.data.forEach(row => {
+                        Object.keys(row).forEach(key => {
+                            if (key.includes('Coste') && !key.includes('TOTAL')) {
+                                const year = key.split(' ')[0];
+                                if (!yearsProd.includes(year)) yearsProd.push(year);
+                            }
+                        });
+                    });
+                    yearsProd.sort();
+                    
+                    // Top 10 por coste total
+                    const sortedProd = chartData.prodData.data
+                        .map(row => ({
+                            producto: row.Producto,
+                            total: parseFloat((row['TOTAL Coste'] || '0').replace(/\./g, '').replace(',', '.'))
+                        }))
+                        .sort((a, b) => b.total - a.total)
+                        .slice(0, 10);
+                    
+                    const colorsProd = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
+                    const datasetsProd = sortedProd.map((item, idx) => {
+                        const row = chartData.prodData.data.find(r => r.Producto === item.producto);
+                        return {
+                            label: item.producto.substring(0, 20) + '...',
+                            data: yearsProd.map(year => {
+                                const costeStr = row[year + ' Coste'] || '0';
+                                return parseFloat(costeStr.replace(/\./g, '').replace(',', '.'));
+                            }),
+                            borderColor: colorsProd[idx],
+                            borderWidth: 2,
+                            tension: 0.4
+                        };
+                    });
+                    
+                    const chart6 = new Chart(canvas6, {
+                        type: 'line',
+                        data: { labels: yearsProd, datasets: datasetsProd },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Top 10 medicamentos', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 14 }, boxWidth: 12, padding: 8 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 18 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img6 = canvas6.toDataURL('image/png', 1.0);
+                    pdf.addImage(img6, 'PNG', margin + chartWidth + chartMarginX, yPosRow3, chartWidth, chartHeight);
+                    chart6.destroy();
+                    console.log('✅ Gráfico 6 añadido');
+                    
+                } catch (error) {
+                    console.error('❌ Error generando gráficos:', error);
+                    throw error;
+                } finally {
+                    // Limpiar
+                    document.body.removeChild(tempDiv);
+                }
+                
+                console.log('💾 Guardando PDF...');
+                pdf.save(`Informe_Evolucion_Anual_${new Date().toISOString().split('T')[0]}.pdf`);
+                console.log('✅ PDF generado exitosamente');
+            };
+            
+            const generateReport2 = async (dataToProcess) => {
+                console.log('📄 Iniciando generación Informe 2 (Trimestral)...');
+                
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const pageWidth = 210;
+                const pageHeight = 297;
+                const margin = 15;
+                
+                // --- ENCABEZADO ---
+                pdf.setFontSize(16);
+                pdf.setFont('helvetica', 'bold');
+                pdf.text('Indicadores IMID. Evolución trimestral', pageWidth / 2, 15, { align: 'center' });
+                
+                // Hospital
+                pdf.setFontSize(10);
+                pdf.setFont('helvetica', 'normal');
+                pdf.text('Hospital Universitario i Politécnico La Fe. Valencia', pageWidth / 2, 22, { align: 'center' });
+                
+                // Fecha
+                const fecha = new Date().toLocaleDateString('es-ES', { 
+                    year: 'numeric', month: 'long', day: 'numeric' 
+                });
+                pdf.text(`Fecha del informe: ${fecha}`, margin, 30);
+                
+                // Filtros
+                let yPos = 35;
+                const activeFilters = [];
+                if (filters.year) activeFilters.push(`Año: ${filters.year}`);
+                if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
+                if (filters.pathology) activeFilters.push(`Diagnóstico: ${filters.pathology}`);
+                if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                
+                if (activeFilters.length > 0) {
+                    pdf.setFontSize(9);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.text('Filtros aplicados:', margin, yPos);
+                    pdf.setFont('helvetica', 'normal');
+                    activeFilters.forEach((filter, i) => {
+                        pdf.text(filter, margin + 35, yPos + (i * 4));
+                    });
+                    yPos += (activeFilters.length * 4) + 3;
+                } else {
+                    pdf.setFontSize(9);
+                    pdf.text('Período: Todos los datos disponibles', margin, yPos);
+                    yPos += 5;
+                }
+                
+                // --- DATOS GLOBALES ---
+                const totals = calculateGlobalTotals(dataToProcess);
+                pdf.setFontSize(9);
+                pdf.setFont('helvetica', 'bold');
+                pdf.text('Indicadores globales:', margin, yPos);
+                yPos += 5;
+                
+                pdf.setFont('helvetica', 'normal');
+                const cols = [
+                    `Pacientes: ${totals.pacientes.toLocaleString('es-ES')}`,
+                    `Visitas: ${totals.visitas.toLocaleString('es-ES')}`,
+                    `Dispensaciones: ${totals.dispensaciones.toLocaleString('es-ES')}`,
+                    `Coste: €${totals.coste.toLocaleString('es-ES', {minimumFractionDigits: 2})}`
+                ];
+                
+                const colWidth = (pageWidth - 2 * margin) / 4;
+                cols.forEach((text, i) => {
+                    pdf.text(text, margin + (i * colWidth), yPos);
+                });
+                yPos += 8;
+                
+                console.log('📊 Generando gráficos trimestrales...');
+                
+                // --- CREAR GRÁFICOS ---
+                const chartData = {
+                    quarterData: calculateByQuarters(dataToProcess),
+                    paData: calculatePatientsByActiveIngredientByQuarter(dataToProcess),
+                    bioData: calculateBiosimilarPatientsByQuarter(dataToProcess),
+                    cpData: calculateCostPerPatientByQuarter(dataToProcess),
+                    prodData: calculateUnitsAndCostByProductByQuarter(dataToProcess)
+                };
+                
+                // Crear canvas temporal
+                const tempDiv = document.createElement('div');
+                tempDiv.style.position = 'fixed';
+                tempDiv.style.left = '-9999px';
+                tempDiv.style.width = '1200px';
+                tempDiv.style.height = '900px';
+                document.body.appendChild(tempDiv);
+                
+                try {
+                    const chartWidth = 85;
+                    const chartHeight = 55;
+                    const chartMarginX = 10;
+                    const chartMarginY = 5;
+                    
+                    // GRÁFICO 1: Indicadores por trimestre
+                    console.log('Gráfico 1: Indicadores por trimestre');
+                    const canvas1 = document.createElement('canvas');
+                    canvas1.width = 800;
+                    canvas1.height = 600;
+                    tempDiv.appendChild(canvas1);
+                    
+                    const chart1 = new Chart(canvas1, {
+                        type: 'line',
+                        data: {
+                            labels: chartData.quarterData.data.map(r => r.Periodo),
+                            datasets: [
+                                {
+                                    label: 'Pacientes',
+                                    data: chartData.quarterData.data.map(r => r.Pacientes),
+                                    borderColor: '#667eea',
+                                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                                    borderWidth: 3,
+                                    tension: 0.4,
+                                    fill: true
+                                },
+                                {
+                                    label: 'Visitas',
+                                    data: chartData.quarterData.data.map(r => r.Visitas),
+                                    borderColor: '#84fab0',
+                                    backgroundColor: 'rgba(132, 250, 176, 0.1)',
+                                    borderWidth: 3,
+                                    tension: 0.4,
+                                    fill: true
+                                },
+                                {
+                                    label: 'Dispensaciones',
+                                    data: chartData.quarterData.data.map(r => r.Dispensaciones),
+                                    borderColor: '#fcb69f',
+                                    backgroundColor: 'rgba(252, 182, 159, 0.1)',
+                                    borderWidth: 3,
+                                    tension: 0.4,
+                                    fill: true
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Indicadores por trimestre', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 18 }, padding: 12, boxWidth: 15 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 16 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img1 = canvas1.toDataURL('image/png', 1.0);
+                    pdf.addImage(img1, 'PNG', margin, yPos, chartWidth, chartHeight);
+                    chart1.destroy();
+                    console.log('✅ Gráfico 1 añadido');
+                    
+                    // GRÁFICO 2: Pacientes por PA
+                    console.log('Gráfico 2: Pacientes por PA');
+                    const canvas2 = document.createElement('canvas');
+                    canvas2.width = 800;
+                    canvas2.height = 600;
+                    tempDiv.appendChild(canvas2);
+                    
+                    const topPA = chartData.paData.data.slice(0, 8);
+                    const quartersPA = [];
+                    chartData.paData.data.forEach(row => {
+                        Object.keys(row).forEach(key => {
+                            if (key !== 'Principio Activo' && key !== 'TOTAL' && !quartersPA.includes(key)) {
+                                quartersPA.push(key);
+                            }
+                        });
+                    });
+                    quartersPA.sort();
+                    
+                    const colorsPA = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
+                    const datasetsPA = topPA.map((row, idx) => ({
+                        label: row['Principio Activo'].substring(0, 20),
+                        data: quartersPA.map(q => row[q] || 0),
+                        borderColor: colorsPA[idx],
+                        borderWidth: 2,
+                        tension: 0.4
+                    }));
+                    
+                    const chart2 = new Chart(canvas2, {
+                        type: 'line',
+                        data: { labels: quartersPA, datasets: datasetsPA },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Pacientes por PA (Top 8)', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 15 }, boxWidth: 15, padding: 10 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 16 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img2 = canvas2.toDataURL('image/png', 1.0);
+                    pdf.addImage(img2, 'PNG', margin + chartWidth + chartMarginX, yPos, chartWidth, chartHeight);
+                    chart2.destroy();
+                    console.log('✅ Gráfico 2 añadido');
+                    
+                    // GRÁFICO 3: Biosimilares
+                    console.log('Gráfico 3: Biosimilares');
+                    const canvas3 = document.createElement('canvas');
+                    canvas3.width = 800;
+                    canvas3.height = 600;
+                    tempDiv.appendChild(canvas3);
+                    
+                    const topBio = chartData.bioData.data.slice(0, 6);
+                    const quartersBio = [];
+                    chartData.bioData.data.forEach(row => {
+                        Object.keys(row).forEach(key => {
+                            if (key !== 'Biosimilar' && key !== 'TOTAL' && !quartersBio.includes(key)) {
+                                quartersBio.push(key);
+                            }
+                        });
+                    });
+                    quartersBio.sort();
+                    
+                    const colorsBio = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
+                    const datasetsBio = topBio.map((row, idx) => ({
+                        label: row.Biosimilar.substring(0, 20),
+                        data: quartersBio.map(q => row[q] || 0),
+                        borderColor: colorsBio[idx],
+                        borderWidth: 2,
+                        tension: 0.4
+                    }));
+                    
+                    const chart3 = new Chart(canvas3, {
+                        type: 'line',
+                        data: { labels: quartersBio, datasets: datasetsBio },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Pacientes con biosimilares (Top 6)', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 15 }, boxWidth: 15, padding: 10 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 16 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img3 = canvas3.toDataURL('image/png', 1.0);
+                    
+                    let yPosRow2 = yPos + chartHeight + chartMarginY;
+                    pdf.addImage(img3, 'PNG', margin, yPosRow2, chartWidth, chartHeight);
+                    chart3.destroy();
+                    console.log('✅ Gráfico 3 añadido');
+                    
+                    // GRÁFICO 4: Coste total
+                    console.log('Gráfico 4: Coste total');
+                    const canvas4 = document.createElement('canvas');
+                    canvas4.width = 800;
+                    canvas4.height = 600;
+                    tempDiv.appendChild(canvas4);
+                    
+                    const chart4 = new Chart(canvas4, {
+                        type: 'bar',
+                        data: {
+                            labels: chartData.quarterData.data.map(r => r.Periodo),
+                            datasets: [{
+                                label: 'Coste (€)',
+                                data: chartData.quarterData.data.map(r => parseFloat(r.Coste)),
+                                backgroundColor: 'rgba(252, 182, 159, 0.8)',
+                                borderColor: '#fcb69f',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Coste total por trimestre', font: { size: 22, weight: 'bold' } },
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 16 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img4 = canvas4.toDataURL('image/png', 1.0);
+                    pdf.addImage(img4, 'PNG', margin + chartWidth + chartMarginX, yPosRow2, chartWidth, chartHeight);
+                    chart4.destroy();
+                    console.log('✅ Gráfico 4 añadido');
+                    
+                    let yPosRow3 = yPosRow2 + chartHeight + chartMarginY;
+                    
+                    // GRÁFICO 5: Coste/Paciente
+                    console.log('Gráfico 5: Coste/Paciente');
+                    const canvas5 = document.createElement('canvas');
+                    canvas5.width = 800;
+                    canvas5.height = 600;
+                    tempDiv.appendChild(canvas5);
+                    
+                    const chart5 = new Chart(canvas5, {
+                        type: 'bar',
+                        data: {
+                            labels: chartData.cpData.data.map(r => r.Periodo),
+                            datasets: [{
+                                label: 'Coste/Paciente (€)',
+                                data: chartData.cpData.data.map(r => parseFloat(r['Coste/Paciente'])),
+                                backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                                borderColor: '#667eea',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Coste/Paciente por trimestre', font: { size: 22, weight: 'bold' } },
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 16 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img5 = canvas5.toDataURL('image/png', 1.0);
+                    pdf.addImage(img5, 'PNG', margin, yPosRow3, chartWidth, chartHeight);
+                    chart5.destroy();
+                    console.log('✅ Gráfico 5 añadido');
+                    
+                    // GRÁFICO 6: Top 10 medicamentos
+                    console.log('Gráfico 6: Top 10 medicamentos');
+                    const canvas6 = document.createElement('canvas');
+                    canvas6.width = 800;
+                    canvas6.height = 600;
+                    tempDiv.appendChild(canvas6);
+                    
+                    const quartersProd = [];
+                    chartData.prodData.data.forEach(row => {
+                        Object.keys(row).forEach(key => {
+                            if (key.includes('Coste') && !key.includes('TOTAL')) {
+                                const quarter = key.split(' ')[0];
+                                if (!quartersProd.includes(quarter)) quartersProd.push(quarter);
+                            }
+                        });
+                    });
+                    quartersProd.sort();
+                    
+                    const sortedProd = chartData.prodData.data
+                        .map(row => ({
+                            producto: row.Producto,
+                            total: parseFloat((row['TOTAL Coste'] || '0').replace(/\./g, '').replace(',', '.'))
+                        }))
+                        .sort((a, b) => b.total - a.total)
+                        .slice(0, 10);
+                    
+                    const colorsProd = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
+                    const datasetsProd = sortedProd.map((item, idx) => {
+                        const row = chartData.prodData.data.find(r => r.Producto === item.producto);
+                        return {
+                            label: item.producto.substring(0, 20) + '...',
+                            data: quartersProd.map(q => {
+                                const costeStr = row[q + ' Coste'] || '0';
+                                return parseFloat(costeStr.replace(/\./g, '').replace(',', '.'));
+                            }),
+                            borderColor: colorsProd[idx],
+                            borderWidth: 2,
+                            tension: 0.4
+                        };
+                    });
+                    
+                    const chart6 = new Chart(canvas6, {
+                        type: 'line',
+                        data: { labels: quartersProd, datasets: datasetsProd },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Top 10 medicamentos', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 14 }, boxWidth: 12, padding: 8 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 16 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img6 = canvas6.toDataURL('image/png', 1.0);
+                    pdf.addImage(img6, 'PNG', margin + chartWidth + chartMarginX, yPosRow3, chartWidth, chartHeight);
+                    chart6.destroy();
+                    console.log('✅ Gráfico 6 añadido');
+                    
+                } catch (error) {
+                    console.error('❌ Error generando gráficos:', error);
+                    throw error;
+                } finally {
+                    document.body.removeChild(tempDiv);
+                }
+                
+                console.log('💾 Guardando PDF...');
+                pdf.save(`Informe_Evolucion_Trimestral_${new Date().toISOString().split('T')[0]}.pdf`);
+                console.log('✅ PDF generado exitosamente');
+            };
+            
+            const generateReport3 = async (dataToProcess) => {
+                console.log('📄 Iniciando generación Informe 3 (Mensual)...');
+                
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const pageWidth = 210;
+                const pageHeight = 297;
+                const margin = 15;
+                
+                // --- ENCABEZADO ---
+                pdf.setFontSize(16);
+                pdf.setFont('helvetica', 'bold');
+                pdf.text('Indicadores IMID. Evolución mensual', pageWidth / 2, 15, { align: 'center' });
+                
+                // Hospital
+                pdf.setFontSize(10);
+                pdf.setFont('helvetica', 'normal');
+                pdf.text('Hospital Universitario i Politécnico La Fe. Valencia', pageWidth / 2, 22, { align: 'center' });
+                
+                // Fecha
+                const fecha = new Date().toLocaleDateString('es-ES', { 
+                    year: 'numeric', month: 'long', day: 'numeric' 
+                });
+                pdf.text(`Fecha del informe: ${fecha}`, margin, 30);
+                
+                // Filtros
+                let yPos = 35;
+                const activeFilters = [];
+                if (filters.year) activeFilters.push(`Año: ${filters.year}`);
+                if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
+                if (filters.pathology) activeFilters.push(`Diagnóstico: ${filters.pathology}`);
+                if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                
+                if (activeFilters.length > 0) {
+                    pdf.setFontSize(9);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.text('Filtros aplicados:', margin, yPos);
+                    pdf.setFont('helvetica', 'normal');
+                    activeFilters.forEach((filter, i) => {
+                        pdf.text(filter, margin + 35, yPos + (i * 4));
+                    });
+                    yPos += (activeFilters.length * 4) + 3;
+                } else {
+                    pdf.setFontSize(9);
+                    pdf.text('Período: Todos los datos disponibles', margin, yPos);
+                    yPos += 5;
+                }
+                
+                // --- DATOS GLOBALES ---
+                const totals = calculateGlobalTotals(dataToProcess);
+                pdf.setFontSize(9);
+                pdf.setFont('helvetica', 'bold');
+                pdf.text('Indicadores globales:', margin, yPos);
+                yPos += 5;
+                
+                pdf.setFont('helvetica', 'normal');
+                const cols = [
+                    `Pacientes: ${totals.pacientes.toLocaleString('es-ES')}`,
+                    `Visitas: ${totals.visitas.toLocaleString('es-ES')}`,
+                    `Dispensaciones: ${totals.dispensaciones.toLocaleString('es-ES')}`,
+                    `Coste: €${totals.coste.toLocaleString('es-ES', {minimumFractionDigits: 2})}`
+                ];
+                
+                const colWidth = (pageWidth - 2 * margin) / 4;
+                cols.forEach((text, i) => {
+                    pdf.text(text, margin + (i * colWidth), yPos);
+                });
+                yPos += 8;
+                
+                console.log('📊 Generando gráficos mensuales...');
+                
+                // --- CREAR GRÁFICOS ---
+                const chartData = {
+                    monthData: calculateByMonths(dataToProcess),
+                    paData: calculatePatientsByActiveIngredientByMonth(dataToProcess),
+                    bioData: calculateBiosimilarPatientsByMonth(dataToProcess),
+                    cpData: calculateCostPerPatientByMonth(dataToProcess),
+                    prodData: calculateUnitsAndCostByProductByMonth(dataToProcess)
+                };
+                
+                // Crear canvas temporal
+                const tempDiv = document.createElement('div');
+                tempDiv.style.position = 'fixed';
+                tempDiv.style.left = '-9999px';
+                tempDiv.style.width = '1200px';
+                tempDiv.style.height = '900px';
+                document.body.appendChild(tempDiv);
+                
+                try {
+                    const chartWidth = 85;
+                    const chartHeight = 55;
+                    const chartMarginX = 10;
+                    const chartMarginY = 5;
+                    
+                    // GRÁFICO 1: Indicadores por mes
+                    console.log('Gráfico 1: Indicadores por mes');
+                    const canvas1 = document.createElement('canvas');
+                    canvas1.width = 800;
+                    canvas1.height = 600;
+                    tempDiv.appendChild(canvas1);
+                    
+                    const chart1 = new Chart(canvas1, {
+                        type: 'line',
+                        data: {
+                            labels: chartData.monthData.data.map(r => r.Periodo),
+                            datasets: [
+                                {
+                                    label: 'Pacientes',
+                                    data: chartData.monthData.data.map(r => r.Pacientes),
+                                    borderColor: '#667eea',
+                                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                                    borderWidth: 3,
+                                    tension: 0.4,
+                                    fill: true
+                                },
+                                {
+                                    label: 'Visitas',
+                                    data: chartData.monthData.data.map(r => r.Visitas),
+                                    borderColor: '#84fab0',
+                                    backgroundColor: 'rgba(132, 250, 176, 0.1)',
+                                    borderWidth: 3,
+                                    tension: 0.4,
+                                    fill: true
+                                },
+                                {
+                                    label: 'Dispensaciones',
+                                    data: chartData.monthData.data.map(r => r.Dispensaciones),
+                                    borderColor: '#fcb69f',
+                                    backgroundColor: 'rgba(252, 182, 159, 0.1)',
+                                    borderWidth: 3,
+                                    tension: 0.4,
+                                    fill: true
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Indicadores por mes', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 18 }, padding: 12, boxWidth: 15 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 14 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img1 = canvas1.toDataURL('image/png', 1.0);
+                    pdf.addImage(img1, 'PNG', margin, yPos, chartWidth, chartHeight);
+                    chart1.destroy();
+                    console.log('✅ Gráfico 1 añadido');
+                    
+                    // GRÁFICO 2: Pacientes por PA
+                    console.log('Gráfico 2: Pacientes por PA');
+                    const canvas2 = document.createElement('canvas');
+                    canvas2.width = 800;
+                    canvas2.height = 600;
+                    tempDiv.appendChild(canvas2);
+                    
+                    const topPA = chartData.paData.data.slice(0, 8);
+                    const monthsPA = [];
+                    chartData.paData.data.forEach(row => {
+                        Object.keys(row).forEach(key => {
+                            if (key !== 'Principio Activo' && key !== 'TOTAL' && !monthsPA.includes(key)) {
+                                monthsPA.push(key);
+                            }
+                        });
+                    });
+                    monthsPA.sort();
+                    
+                    const colorsPA = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
+                    const datasetsPA = topPA.map((row, idx) => ({
+                        label: row['Principio Activo'].substring(0, 20),
+                        data: monthsPA.map(m => row[m] || 0),
+                        borderColor: colorsPA[idx],
+                        borderWidth: 2,
+                        tension: 0.4
+                    }));
+                    
+                    const chart2 = new Chart(canvas2, {
+                        type: 'line',
+                        data: { labels: monthsPA, datasets: datasetsPA },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Pacientes por PA (Top 8)', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 15 }, boxWidth: 15, padding: 10 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 14 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img2 = canvas2.toDataURL('image/png', 1.0);
+                    pdf.addImage(img2, 'PNG', margin + chartWidth + chartMarginX, yPos, chartWidth, chartHeight);
+                    chart2.destroy();
+                    console.log('✅ Gráfico 2 añadido');
+                    
+                    // GRÁFICO 3: Biosimilares
+                    console.log('Gráfico 3: Biosimilares');
+                    const canvas3 = document.createElement('canvas');
+                    canvas3.width = 800;
+                    canvas3.height = 600;
+                    tempDiv.appendChild(canvas3);
+                    
+                    const topBio = chartData.bioData.data.slice(0, 6);
+                    const monthsBio = [];
+                    chartData.bioData.data.forEach(row => {
+                        Object.keys(row).forEach(key => {
+                            if (key !== 'Biosimilar' && key !== 'TOTAL' && !monthsBio.includes(key)) {
+                                monthsBio.push(key);
+                            }
+                        });
+                    });
+                    monthsBio.sort();
+                    
+                    const colorsBio = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
+                    const datasetsBio = topBio.map((row, idx) => ({
+                        label: row.Biosimilar.substring(0, 20),
+                        data: monthsBio.map(m => row[m] || 0),
+                        borderColor: colorsBio[idx],
+                        borderWidth: 2,
+                        tension: 0.4
+                    }));
+                    
+                    const chart3 = new Chart(canvas3, {
+                        type: 'line',
+                        data: { labels: monthsBio, datasets: datasetsBio },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Pacientes con biosimilares (Top 6)', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 15 }, boxWidth: 15, padding: 10 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 14 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img3 = canvas3.toDataURL('image/png', 1.0);
+                    
+                    let yPosRow2 = yPos + chartHeight + chartMarginY;
+                    pdf.addImage(img3, 'PNG', margin, yPosRow2, chartWidth, chartHeight);
+                    chart3.destroy();
+                    console.log('✅ Gráfico 3 añadido');
+                    
+                    // GRÁFICO 4: Coste total
+                    console.log('Gráfico 4: Coste total');
+                    const canvas4 = document.createElement('canvas');
+                    canvas4.width = 800;
+                    canvas4.height = 600;
+                    tempDiv.appendChild(canvas4);
+                    
+                    const chart4 = new Chart(canvas4, {
+                        type: 'bar',
+                        data: {
+                            labels: chartData.monthData.data.map(r => r.Periodo),
+                            datasets: [{
+                                label: 'Coste (€)',
+                                data: chartData.monthData.data.map(r => parseFloat(r.Coste)),
+                                backgroundColor: 'rgba(252, 182, 159, 0.8)',
+                                borderColor: '#fcb69f',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Coste total por mes', font: { size: 22, weight: 'bold' } },
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 14 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img4 = canvas4.toDataURL('image/png', 1.0);
+                    pdf.addImage(img4, 'PNG', margin + chartWidth + chartMarginX, yPosRow2, chartWidth, chartHeight);
+                    chart4.destroy();
+                    console.log('✅ Gráfico 4 añadido');
+                    
+                    let yPosRow3 = yPosRow2 + chartHeight + chartMarginY;
+                    
+                    // GRÁFICO 5: Coste/Paciente
+                    console.log('Gráfico 5: Coste/Paciente');
+                    const canvas5 = document.createElement('canvas');
+                    canvas5.width = 800;
+                    canvas5.height = 600;
+                    tempDiv.appendChild(canvas5);
+                    
+                    const chart5 = new Chart(canvas5, {
+                        type: 'bar',
+                        data: {
+                            labels: chartData.cpData.data.map(r => r.Periodo),
+                            datasets: [{
+                                label: 'Coste/Paciente (€)',
+                                data: chartData.cpData.data.map(r => parseFloat(r['Coste/Paciente'])),
+                                backgroundColor: 'rgba(102, 126, 234, 0.8)',
+                                borderColor: '#667eea',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Coste/Paciente por mes', font: { size: 22, weight: 'bold' } },
+                                legend: { display: false }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 14 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img5 = canvas5.toDataURL('image/png', 1.0);
+                    pdf.addImage(img5, 'PNG', margin, yPosRow3, chartWidth, chartHeight);
+                    chart5.destroy();
+                    console.log('✅ Gráfico 5 añadido');
+                    
+                    // GRÁFICO 6: Top 10 medicamentos
+                    console.log('Gráfico 6: Top 10 medicamentos');
+                    const canvas6 = document.createElement('canvas');
+                    canvas6.width = 800;
+                    canvas6.height = 600;
+                    tempDiv.appendChild(canvas6);
+                    
+                    const monthsProd = [];
+                    chartData.prodData.data.forEach(row => {
+                        Object.keys(row).forEach(key => {
+                            if (key.includes('Coste') && !key.includes('TOTAL')) {
+                                const month = key.split(' ')[0];
+                                if (!monthsProd.includes(month)) monthsProd.push(month);
+                            }
+                        });
+                    });
+                    monthsProd.sort();
+                    
+                    const sortedProd = chartData.prodData.data
+                        .map(row => ({
+                            producto: row.Producto,
+                            total: parseFloat((row['TOTAL Coste'] || '0').replace(/\./g, '').replace(',', '.'))
+                        }))
+                        .sort((a, b) => b.total - a.total)
+                        .slice(0, 10);
+                    
+                    const colorsProd = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
+                    const datasetsProd = sortedProd.map((item, idx) => {
+                        const row = chartData.prodData.data.find(r => r.Producto === item.producto);
+                        return {
+                            label: item.producto.substring(0, 20) + '...',
+                            data: monthsProd.map(m => {
+                                const costeStr = row[m + ' Coste'] || '0';
+                                return parseFloat(costeStr.replace(/\./g, '').replace(',', '.'));
+                            }),
+                            borderColor: colorsProd[idx],
+                            borderWidth: 2,
+                            tension: 0.4
+                        };
+                    });
+                    
+                    const chart6 = new Chart(canvas6, {
+                        type: 'line',
+                        data: { labels: monthsProd, datasets: datasetsProd },
+                        options: {
+                            responsive: false,
+                            plugins: {
+                                title: { display: true, text: 'Top 10 medicamentos', font: { size: 22, weight: 'bold' } },
+                                legend: { display: true, position: 'bottom', labels: { font: { size: 14 }, boxWidth: 12, padding: 8 } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, ticks: { font: { size: 18 } } },
+                                x: { ticks: { font: { size: 14 } } }
+                            }
+                        }
+                    });
+                    
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                    const img6 = canvas6.toDataURL('image/png', 1.0);
+                    pdf.addImage(img6, 'PNG', margin + chartWidth + chartMarginX, yPosRow3, chartWidth, chartHeight);
+                    chart6.destroy();
+                    console.log('✅ Gráfico 6 añadido');
+                    
+                } catch (error) {
+                    console.error('❌ Error generando gráficos:', error);
+                    throw error;
+                } finally {
+                    document.body.removeChild(tempDiv);
+                }
+                
+                console.log('💾 Guardando PDF...');
+                pdf.save(`Informe_Evolucion_Mensual_${new Date().toISOString().split('T')[0]}.pdf`);
+                console.log('✅ PDF generado exitosamente');
+            };
+            
+            
+            const createChartCanvas = async (container, title, createChart) => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 800;
+                canvas.height = 600;
+                container.appendChild(canvas);
+                
+                const ctx = canvas.getContext('2d');
+                const chart = await createChart(ctx);
+                
+                // Esperar a que el gráfico se renderice
+                await new Promise(resolve => setTimeout(resolve, 100));
+                
+                // Destruir el gráfico
+                chart.destroy();
+                
+                return canvas;
+            };
+            
+            const getChartOptions = (title, showLegend = false) => ({
+                responsive: false,
+                maintainAspectRatio: true,
+                plugins: {
+                    title: {
+                        display: true,
+                        text: title,
+                        font: { size: 11, weight: 'bold' }
+                    },
+                    legend: {
+                        display: showLegend,
+                        position: 'bottom',
+                        labels: { 
+                            boxWidth: 8, 
+                            font: { size: 7 },
+                            padding: 3
+                        }
+                    }
+                },
+                scales: {
+                    x: { 
+                        ticks: { font: { size: 8 } },
+                        grid: { display: false }
+                    },
+                    y: { 
+                        ticks: { font: { size: 8 } },
+                        beginAtZero: true
+                    }
+                }
+            });
             
             const processOption = (option) => {
                 if (!data) {
@@ -1162,6 +2630,15 @@
                             break;
                         case 13:
                             result = calculateUnitsAndCostByProductByMonth(dataToProcess);
+                            break;
+                        case 14:
+                            result = calculateCostPerPatientByYear(dataToProcess);
+                            break;
+                        case 15:
+                            result = calculateCostPerPatientByQuarter(dataToProcess);
+                            break;
+                        case 16:
+                            result = calculateCostPerPatientByMonth(dataToProcess);
                             break;
                         default:
                             result = { type: 'custom', data: [], title: 'Análisis Personalizado' };
@@ -1341,6 +2818,121 @@
                     title: 'Indicadores por Meses',
                     data: results,
                     chartType: 'line'
+                };
+            };
+
+            
+            const calculateCostPerPatientByYear = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+
+                const yearData = {};
+                
+                validData.forEach(row => {
+                    const year = row['Fecha Dispensación'].getFullYear();
+                    if (!yearData[year]) {
+                        yearData[year] = {
+                            ids: new Set(),
+                            coste: 0
+                        };
+                    }
+                    
+                    yearData[year].ids.add(row['Id']);
+                    yearData[year].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const results = Object.keys(yearData).sort().map(year => ({
+                    Periodo: year,
+                    Pacientes: yearData[year].ids.size,
+                    'Coste Total': yearData[year].coste.toFixed(2),
+                    'Coste/Paciente': (yearData[year].coste / yearData[year].ids.size).toFixed(2)
+                }));
+
+                return {
+                    type: 'cost_per_patient',
+                    title: 'Coste/Paciente por Años',
+                    data: results,
+                    chartType: 'bar'
+                };
+            };
+
+            const calculateCostPerPatientByQuarter = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+
+                const quarterData = {};
+                
+                validData.forEach(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = date.getMonth();
+                    const quarter = Math.floor(month / 3) + 1;
+                    const key = `${year}-Q${quarter}`;
+                    
+                    if (!quarterData[key]) {
+                        quarterData[key] = {
+                            ids: new Set(),
+                            coste: 0
+                        };
+                    }
+                    
+                    quarterData[key].ids.add(row['Id']);
+                    quarterData[key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const results = Object.keys(quarterData).sort().map(key => ({
+                    Periodo: key,
+                    Pacientes: quarterData[key].ids.size,
+                    'Coste Total': quarterData[key].coste.toFixed(2),
+                    'Coste/Paciente': (quarterData[key].coste / quarterData[key].ids.size).toFixed(2)
+                }));
+
+                return {
+                    type: 'cost_per_patient',
+                    title: 'Coste/Paciente por Trimestres',
+                    data: results,
+                    chartType: 'bar'
+                };
+            };
+
+            const calculateCostPerPatientByMonth = (dataToProcess) => {
+                const validData = dataToProcess.filter(row => 
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+
+                const monthData = {};
+                
+                validData.forEach(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = date.getMonth() + 1;
+                    const key = `${year}-${String(month).padStart(2, '0')}`;
+                    
+                    if (!monthData[key]) {
+                        monthData[key] = {
+                            ids: new Set(),
+                            coste: 0
+                        };
+                    }
+                    
+                    monthData[key].ids.add(row['Id']);
+                    monthData[key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const results = Object.keys(monthData).sort().map(key => ({
+                    Periodo: key,
+                    Pacientes: monthData[key].ids.size,
+                    'Coste Total': monthData[key].coste.toFixed(2),
+                    'Coste/Paciente': (monthData[key].coste / monthData[key].ids.size).toFixed(2)
+                }));
+
+                return {
+                    type: 'cost_per_patient',
+                    title: 'Coste/Paciente por Meses',
+                    data: results,
+                    chartType: 'bar'
                 };
             };
 
@@ -2061,13 +3653,42 @@
                             >
                                 📋 Análisis detallado
                             </button>
+                            <button 
+                                className={`toggle-btn ${viewMode === 'reports' ? 'active' : ''}`}
+                                onClick={() => setViewMode('reports')}
+                            >
+                                📄 Informes
+                            </button>
                         </div>
 
                         {/* === VISTA DASHBOARD === */}
                         {viewMode === 'dashboard' && (
                             <>
-                                <div className="alert alert-info" style={{marginBottom: '20px'}}>
-                                    ℹ️ <strong>Dashboard ejecutivo:</strong> Vista general con indicadores clave y gráficos interactivos.
+                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px'}}>
+                                    <div className="alert alert-info" style={{margin: 0, flex: 1}}>
+                                        ℹ️ <strong>Dashboard ejecutivo:</strong> Vista general con indicadores clave y gráficos interactivos.
+                                    </div>
+                                    <button 
+                                        onClick={() => generateReport(4)} 
+                                        disabled={!data || loading}
+                                        style={{
+                                            marginLeft: '20px',
+                                            padding: '12px 24px',
+                                            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                                            color: 'white',
+                                            border: 'none',
+                                            borderRadius: '8px',
+                                            fontSize: '14px',
+                                            fontWeight: 'bold',
+                                            cursor: 'pointer',
+                                            boxShadow: '0 4px 15px rgba(102, 126, 234, 0.3)',
+                                            transition: 'all 0.3s ease'
+                                        }}
+                                        onMouseOver={(e) => e.target.style.transform = 'translateY(-2px)'}
+                                        onMouseOut={(e) => e.target.style.transform = 'translateY(0)'}
+                                    >
+                                        📄 Generar PDF
+                                    </button>
                                 </div>
                                 
                                 <div className="dashboard-kpis">
@@ -2130,7 +3751,7 @@
                                 
                                 <div className="dashboard-charts">
                                     <div className="chart-card full-width">
-                                        <div className="chart-title">🔄 Penetración de biosimilares</div>
+                                        <div className="chart-title">🔄 Penetración de biosimilares (% pacientes)</div>
                                         <canvas id="biosimilarChart"></canvas>
                                     </div>
                                 </div>
@@ -2194,6 +3815,18 @@
                             <button className="menu-button" onClick={() => processOption(13)} disabled={!data}>
                                 <span className="number">13</span>
                                 Unidades y coste por medicamento (meses)
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(14)} disabled={!data}>
+                                <span className="number">14</span>
+                                Coste/Paciente por años
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(15)} disabled={!data}>
+                                <span className="number">15</span>
+                                Coste/Paciente por trimestres
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(16)} disabled={!data}>
+                                <span className="number">16</span>
+                                Coste/Paciente por meses
                             </button>
                         </div>
 
@@ -2264,6 +3897,48 @@
                                 </div>
                             </div>
                         )}
+                            </>
+                        )}
+
+                        {/* === VISTA INFORMES === */}
+                        {viewMode === 'reports' && (
+                            <>
+                                <div className="alert alert-info" style={{marginBottom: '20px'}}>
+                                    ℹ️ <strong>Informes predefinidos:</strong> Genera informes completos en formato PDF para presentar y compartir.
+                                </div>
+
+                                <h2 style={{marginBottom: '20px', color: '#667eea'}}>📄 Informes predefinidos</h2>
+                                
+                                <div className="menu-grid">
+                                    <button className="menu-button" onClick={() => generateReport(1)} disabled={!data}>
+                                        <span className="number">1</span>
+                                        Evolución anual
+                                    </button>
+                                    <button className="menu-button" onClick={() => generateReport(2)} disabled={!data}>
+                                        <span className="number">2</span>
+                                        Evolución trimestral
+                                    </button>
+                                    <button className="menu-button" onClick={() => generateReport(3)} disabled={!data}>
+                                        <span className="number">3</span>
+                                        Evolución mensual
+                                    </button>
+                                </div>
+
+                                {reportLoading && (
+                                    <div className="loading" style={{marginTop: '30px'}}>
+                                        <div className="spinner"></div>
+                                        <p>Generando informe PDF...</p>
+                                    </div>
+                                )}
+
+                                {reportGenerated && (
+                                    <div className="alert alert-success" style={{marginTop: '20px'}}>
+                                        ✅ <strong>Informe generado exitosamente</strong>
+                                        <p style={{marginTop: '10px', fontSize: '0.9em'}}>
+                                            El informe se ha descargado automáticamente. Si no se descargó, verifica la carpeta de descargas de tu navegador.
+                                        </p>
+                                    </div>
+                                )}
                             </>
                         )}
                     </div>
