@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analizador de dispensaciones farmacéuticas en IMID - V11</title>
+    <title>Analizador de dispensaciones farmacéuticas en IMID - V12</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -3778,6 +3778,13 @@
                                 onClick={() => setViewMode('reports')}
                             >
                                 📄 Informes
+                            </button>
+                            <button 
+                                className="toggle-btn"
+                                onClick={() => window.open('https://embai33.github.io/Normalizador_medicamentos/', '_blank')}
+                                style={{background: 'linear-gradient(135deg, #28a745 0%, #20c997 100%)'}}
+                            >
+                                💊 Normalizar medicamentos
                             </button>
                         </div>
 
