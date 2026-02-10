@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analizador de dispensaciones farmacéuticas en IMID - V12</title>
+    <title>Analizador de dispensaciones farmacéuticas en IMID - V15</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -30,7 +30,7 @@
             margin: 0 auto;
             background: white;
             border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
             overflow: hidden;
         }
 
@@ -57,7 +57,7 @@
         }
 
         .upload-section {
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            background: #f5f7fa;
             border-radius: 15px;
             padding: 5px;
             text-align: center;
@@ -68,8 +68,8 @@
         }
 
         .upload-section:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.3);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
         }
 
         .upload-section.dragover {
@@ -83,7 +83,7 @@
         }
 
         .file-loaded {
-            background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+            background: #e8f5e9;
             border-color: #28a745;
         }
 
@@ -95,7 +95,7 @@
         }
 
         .menu-button {
-            background: linear-gradient(135deg, #3d4268 0%, #3d4268 100%);
+            background: #3d4268;
             color: white;
             border: none;
             padding: 10px;
@@ -104,13 +104,13 @@
             font-weight: 300;
             cursor: pointer;
             transition: all 0.3s ease;
-            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
             text-align: left;
         }
 
         .menu-button:hover:not(:disabled) {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
 
         .menu-button:disabled {
@@ -167,14 +167,14 @@
 
         .export-btn:hover {
             transform: scale(1.05);
-            box-shadow: 0 5px 15px rgba(255,255,255,0.3);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.1);
         }
 
         .table-container {
             overflow-x: auto;
             background: white;
             border-radius: 0 0 10px 10px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
         }
 
         table {
@@ -227,11 +227,11 @@
         }
 
         .stat-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #667eea;
             color: white;
             padding: 25px;
             border-radius: 15px;
-            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.3);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
         }
 
         .stat-card .label {
@@ -294,7 +294,7 @@
             padding: 20px;
             background: white;
             border-radius: 10px;
-            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
         }
 
         canvas {
@@ -378,7 +378,7 @@
         }
         
         .toggle-btn.active {
-            background: linear-gradient(135deg, #667eea 0%, #667eea 100%);
+            background: #667eea;
             color: white;
             border-color: #667eea;
         }
@@ -399,31 +399,31 @@
             background: white;
             padding: 25px;
             border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
             transition: transform 0.3s ease;
         }
-        
+
         .kpi-card:hover {
-            transform: translateY(-5px);
+            transform: translateY(-2px);
         }
         
         .kpi-card.primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #667eea;
             color: white;
         }
-        
+
         .kpi-card.success {
-            background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+            background: #e8f5e9;
             color: #155724;
         }
-        
+
         .kpi-card.warning {
-            background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+            background: #fff3cd;
             color: #856404;
         }
-        
+
         .kpi-card.info {
-            background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+            background: #e3f2fd;
             color: #004085;
         }
         
@@ -458,7 +458,7 @@
             background: white;
             padding: 25px;
             border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
         }
         
         .chart-card.full-width {
@@ -476,7 +476,7 @@
             background: white;
             padding: 25px;
             border-radius: 12px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
             margin-bottom: 25px;
         }
         
@@ -532,7 +532,7 @@
             background: white;
             padding: 25px;
             border-radius: 10px;
-            box-shadow: 0 3px 15px rgba(0,0,0,0.08);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
             margin-bottom: 20px;
         }
         
@@ -565,7 +565,9 @@
             const [results, setResults] = useState(null);
             const [selectedOption, setSelectedOption] = useState(null);
             const [fileName, setFileName] = useState('');
-            const [viewMode, setViewMode] = useState('analysis'); // 'dashboard', 'analysis' o 'reports'
+            const [viewMode, setViewMode] = useState('analysis'); // 'dashboard', 'analysis', 'reports' o 'patient'
+            const [patientId, setPatientId] = useState('');
+            const [patientResults, setPatientResults] = useState(null);
             const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
             const [dragOver, setDragOver] = useState(false);
             const [reportLoading, setReportLoading] = useState(false);
@@ -834,6 +836,193 @@
 
             const handleDragLeave = () => {
                 setDragOver(false);
+            };
+
+            // === ANÁLISIS POR PACIENTE ===
+            const parsePosologia = (posStr) => {
+                // Devuelve { unidadesPorToma, intervaloDias } o null si no se puede parsear
+                if (!posStr || typeof posStr !== 'string') return null;
+                const str = posStr.trim();
+
+                // Patrón principal: "N FORMA cada X días/horas ..."
+                // También: "N Envase cada X día/s ..."
+                // Tomamos solo la ÚLTIMA fase para mantenimiento en pautas complejas con "a continuación"
+                const fases = str.split(/\s+a continuación\s+/i);
+                const faseActiva = fases[fases.length - 1].trim();
+
+                // Regex: captura cantidad, intervalo y unidad (días/horas/día)
+                const match = faseActiva.match(/^(\d+(?:\.\d+)?)\s+.+?\s+cada\s+(\d+(?:\.\d+)?)\s+(días?|día\/s|horas?)\b/i);
+                if (!match) {
+                    // Intentar patrón "cada día" (sin número de intervalo = cada 1 día)
+                    const matchDia = faseActiva.match(/^(\d+(?:\.\d+)?)\s+.+?\s+cada\s+día\b/i);
+                    if (matchDia) {
+                        return { unidadesPorToma: parseFloat(matchDia[1]), intervaloDias: 1 };
+                    }
+                    // Patrón "cada X horas" para comprimidos (ej: cada 12 horas = 0.5 días)
+                    const matchHoras = faseActiva.match(/^(\d+(?:\.\d+)?)\s+.+?\s+cada\s+(\d+(?:\.\d+)?)\s+horas?\b/i);
+                    if (matchHoras) {
+                        const horas = parseFloat(matchHoras[2]);
+                        // Si >= 7 horas, interpretar como días (error de registro)
+                        if (horas >= 7 && horas > 24) {
+                            return { unidadesPorToma: parseFloat(matchHoras[1]), intervaloDias: horas };
+                        }
+                        // Horas reales (ej: cada 12 horas, cada 8 horas)
+                        return { unidadesPorToma: parseFloat(matchHoras[1]), intervaloDias: horas / 24 };
+                    }
+                    return null;
+                }
+
+                const unidadesPorToma = parseFloat(match[1]);
+                let intervalo = parseFloat(match[2]);
+                const unidad = match[3].toLowerCase();
+
+                // Interpretar horas como días si >= 7
+                if (unidad.startsWith('hora')) {
+                    if (intervalo >= 7 && intervalo > 24) {
+                        // Error de registro: "28 horas" = "28 días"
+                    } else {
+                        intervalo = intervalo / 24;
+                    }
+                }
+
+                return { unidadesPorToma, intervaloDias: intervalo };
+            };
+
+            const calcularDiasCubiertos = (cantidad, posologia) => {
+                const parsed = parsePosologia(posologia);
+                if (!parsed || parsed.unidadesPorToma === 0) return null;
+                // días cubiertos = (cantidad / unidades_por_toma) * intervalo_en_días
+                return (cantidad / parsed.unidadesPorToma) * parsed.intervaloDias;
+            };
+
+            const searchPatient = () => {
+                if (!patientId.trim()) return;
+                const filtered = applyFilters();
+                if (!filtered) return;
+
+                const id = patientId.trim();
+                // Buscar por Id (puede ser numérico o texto)
+                const patientData = filtered.filter(row => {
+                    const rowId = String(row['Id'] || '').trim();
+                    return rowId === id;
+                });
+
+                if (patientData.length === 0) {
+                    setPatientResults({ found: false, id: id });
+                    return;
+                }
+
+                // Ordenar cronológicamente, y alfabéticamente por medicamento en la misma fecha
+                const sortFn = (a, b) => {
+                    const dateA = a['Fecha Dispensación'] ? a['Fecha Dispensación'].getTime() : 0;
+                    const dateB = b['Fecha Dispensación'] ? b['Fecha Dispensación'].getTime() : 0;
+                    if (dateA !== dateB) return dateA - dateB;
+                    const medA = (a['Descripción Producto Dispensado'] || '').toUpperCase();
+                    const medB = (b['Descripción Producto Dispensado'] || '').toUpperCase();
+                    return medA.localeCompare(medB);
+                };
+
+                // Separar dispensaciones positivas (cantidad > 0) de devoluciones (cantidad <= 0)
+                const sorted = [...patientData].sort(sortFn);
+                const dispensacionesPositivas = sorted.filter(row => (parseInt(row['Cantidad']) || 0) > 0);
+                const devoluciones = sorted.filter(row => (parseInt(row['Cantidad']) || 0) < 0);
+
+                if (dispensacionesPositivas.length === 0) {
+                    setPatientResults({ found: false, id: id, devoluciones: devoluciones.length > 0 ? devoluciones : null });
+                    return;
+                }
+
+                // Agrupar por tratamiento (principio activo) — solo dispensaciones positivas
+                const tratamientos = [];
+                let currentTratamiento = null;
+
+                dispensacionesPositivas.forEach((row) => {
+                    const principioActivo = (row['Descripción Principio Activo'] || 'DESCONOCIDO').trim();
+                    if (!currentTratamiento || currentTratamiento.principioActivo !== principioActivo) {
+                        if (currentTratamiento) {
+                            tratamientos.push(currentTratamiento);
+                        }
+                        currentTratamiento = {
+                            principioActivo: principioActivo,
+                            dispensaciones: [],
+                            totalUnidades: 0,
+                            totalCoste: 0
+                        };
+                    }
+                    currentTratamiento.dispensaciones.push(row);
+                    currentTratamiento.totalUnidades += parseInt(row['Cantidad']) || 0;
+                    currentTratamiento.totalCoste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+                if (currentTratamiento) {
+                    tratamientos.push(currentTratamiento);
+                }
+
+                // Calcular adherencia (MPR) para cada tratamiento
+                tratamientos.forEach(tto => {
+                    const disps = tto.dispensaciones;
+                    if (disps.length < 2) {
+                        tto.adherencia = null;
+                        tto.adherenciaMotivo = 'Se necesitan al menos 2 dispensaciones para calcular la adherencia';
+                        return;
+                    }
+
+                    const firstDate = disps[0]['Fecha Dispensación'];
+                    const lastDate = disps[disps.length - 1]['Fecha Dispensación'];
+                    if (!firstDate || !lastDate) {
+                        tto.adherencia = null;
+                        tto.adherenciaMotivo = 'Fechas de dispensación no disponibles';
+                        return;
+                    }
+
+                    const diasTotales = Math.round((lastDate.getTime() - firstDate.getTime()) / (1000 * 60 * 60 * 24));
+                    if (diasTotales <= 0) {
+                        tto.adherencia = null;
+                        tto.adherenciaMotivo = 'Período insuficiente (todas las dispensaciones en la misma fecha)';
+                        return;
+                    }
+
+                    // Calcular días cubiertos: todas las dispensaciones EXCEPTO la última
+                    let diasCubiertos = 0;
+                    let posologiaNoParseableCount = 0;
+                    const dispsParaCalculo = disps.slice(0, -1); // Excluir última
+
+                    dispsParaCalculo.forEach(row => {
+                        const cantidad = parseInt(row['Cantidad']) || 0;
+                        const posologia = row['Posología (Según Prescripción)'] || '';
+                        const dias = calcularDiasCubiertos(cantidad, posologia);
+                        if (dias !== null) {
+                            diasCubiertos += dias;
+                        } else {
+                            posologiaNoParseableCount++;
+                        }
+                    });
+
+                    if (posologiaNoParseableCount > 0) {
+                        tto.adherencia = null;
+                        tto.adherenciaMotivo = `No se pudo interpretar la posología en ${posologiaNoParseableCount} de ${dispsParaCalculo.length} dispensaciones`;
+                        tto.adherenciaWarning = true;
+                        return;
+                    }
+
+                    tto.diasTotales = diasTotales;
+                    tto.diasCubiertos = Math.round(diasCubiertos * 100) / 100;
+                    tto.adherencia = Math.round((diasCubiertos / diasTotales) * 10000) / 100; // % con 2 decimales
+                });
+
+                // Totales globales (solo dispensaciones positivas)
+                const totalUnidades = tratamientos.reduce((sum, t) => sum + t.totalUnidades, 0);
+                const totalCoste = tratamientos.reduce((sum, t) => sum + t.totalCoste, 0);
+
+                setPatientResults({
+                    found: true,
+                    id: id,
+                    dispensaciones: dispensacionesPositivas,
+                    tratamientos: tratamientos,
+                    totalUnidades: totalUnidades,
+                    totalCoste: totalCoste,
+                    multipleTratamientos: tratamientos.length > 1,
+                    devoluciones: devoluciones.length > 0 ? devoluciones : null
+                });
             };
 
             const applyFilters = () => {
@@ -4386,6 +4575,54 @@
                 }
             });
             
+            const calculatePatientList = (dataToProcess) => {
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+
+                // Obtener IDs únicos de pacientes
+                const patientIds = [...new Set(validData.map(row => row['Id']))].sort((a, b) => a - b);
+
+                // Construir descripción de filtros activos
+                const activeFilters = [];
+                if (filters.year) activeFilters.push(`Año: ${filters.year}`);
+                if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
+                if (filters.pathology) activeFilters.push(`Patología: ${filters.pathology}`);
+                if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                if (filters.dateFrom) activeFilters.push(`Desde: ${filters.dateFrom}`);
+                if (filters.dateTo) activeFilters.push(`Hasta: ${filters.dateTo}`);
+                const filterDesc = activeFilters.length > 0 ? activeFilters.join(' | ') : 'Sin filtros (todos los registros)';
+
+                // Crear datos de tabla: cada fila es un paciente con su resumen
+                const tableData = patientIds.map(id => {
+                    const patientRows = validData.filter(row => row['Id'] === id);
+                    const dispensaciones = patientRows.length;
+                    const costeTotal = patientRows.reduce((sum, row) => sum + (parseFloat(row['Coste Dispensación']) || 0), 0);
+                    const principiosActivos = [...new Set(patientRows.map(row => row['Descripción Principio Activo']).filter(Boolean))].join(', ');
+                    const servicios = [...new Set(patientRows.map(row => row['Servicio Prescriptor']).filter(Boolean))].join(', ');
+                    const fechas = patientRows.map(row => row['Fecha Dispensación']).filter(Boolean).sort((a, b) => a - b);
+                    const primeraFecha = fechas.length > 0 ? fechas[0].toLocaleDateString('es-ES') : '-';
+                    const ultimaFecha = fechas.length > 0 ? fechas[fechas.length - 1].toLocaleDateString('es-ES') : '-';
+
+                    return {
+                        'Id Paciente': id,
+                        'Dispensaciones': dispensaciones,
+                        'Coste Total': Math.round(costeTotal * 100) / 100,
+                        'Principios Activos': principiosActivos,
+                        'Servicios': servicios,
+                        'Primera Disp.': primeraFecha,
+                        'Última Disp.': ultimaFecha
+                    };
+                });
+
+                return {
+                    type: 'patientList',
+                    title: `Listado de pacientes (${patientIds.length}) — ${filterDesc}`,
+                    data: tableData,
+                    headers: ['Id Paciente', 'Dispensaciones', 'Coste Total', 'Principios Activos', 'Servicios', 'Primera Disp.', 'Última Disp.']
+                };
+            };
+
             const processOption = (option) => {
                 if (!data) {
                     alert('Por favor, carga un archivo Excel primero');
@@ -4459,6 +4696,9 @@
                             break;
                         case 20:
                             result = calculateActivityHeatmap(dataToProcess);
+                            break;
+                        case 21:
+                            result = calculatePatientList(dataToProcess);
                             break;
                         default:
                             result = { type: 'custom', data: [], title: 'Análisis Personalizado' };
@@ -5835,16 +6075,22 @@
                             >
                                 📋 Análisis detallado
                             </button>
-                            <button 
+                            <button
                                 className={`toggle-btn ${viewMode === 'reports' ? 'active' : ''}`}
                                 onClick={() => setViewMode('reports')}
                             >
                                 📄 Informes
                             </button>
-                            <button 
+                            <button
+                                className={`toggle-btn ${viewMode === 'patient' ? 'active' : ''}`}
+                                onClick={() => setViewMode('patient')}
+                            >
+                                🔍 Histórico por paciente
+                            </button>
+                            <button
                                 className="toggle-btn"
                                 onClick={() => window.open('https://embai33.github.io/Normalizador_medicamentos/', '_blank')}
-                                style={{background: 'linear-gradient(135deg, #28a745 0%, #20c997 100%)'}}
+                                style={{background: '#28a745', color: 'white'}}
                             >
                                 💊 Normalizar medicamentos
                             </button>
@@ -5863,14 +6109,14 @@
                                         style={{
                                             marginLeft: '20px',
                                             padding: '12px 24px',
-                                            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                                            background: '#667eea',
                                             color: 'white',
                                             border: 'none',
                                             borderRadius: '8px',
                                             fontSize: '14px',
                                             fontWeight: 'bold',
                                             cursor: 'pointer',
-                                            boxShadow: '0 4px 15px rgba(102, 126, 234, 0.3)',
+                                            boxShadow: '0 2px 6px rgba(0, 0, 0, 0.15)',
                                             transition: 'all 0.3s ease'
                                         }}
                                         onMouseOver={(e) => e.target.style.transform = 'translateY(-2px)'}
@@ -5950,7 +6196,7 @@
                         {/* === VISTA ANÁLISIS === */}
                         {viewMode === 'analysis' && (
                             <>
-                        <h2 style={{marginBottom: '20px', color: '#667eea'}}>📊 Menú principal de indicadores</h2>
+                        <h2 style={{marginBottom: '20px', color: '#667eea'}}>📊 Menú principal</h2>
                         
                         <div className="menu-grid">
                             <button className="menu-button" onClick={() => processOption(1)} disabled={!data}>
@@ -6032,6 +6278,10 @@
                             <button className="menu-button" onClick={() => processOption(20)} disabled={!data}>
                                 <span className="number">20</span>
                                 Mapa de calor (actividad)
+                            </button>
+                            <button className="menu-button" onClick={() => processOption(21)} disabled={!data}>
+                                <span className="number">21</span>
+                                Listado de pacientes (según filtros)
                             </button>
                         </div>
 
@@ -6179,6 +6429,294 @@
                                 </div>
                             </div>
                         )}
+                            </>
+                        )}
+
+                        {/* === VISTA ANÁLISIS POR PACIENTE === */}
+                        {viewMode === 'patient' && (
+                            <>
+                                <div className="alert alert-info" style={{marginBottom: '20px'}}>
+                                    ℹ️ <strong>Histórico por paciente:</strong> Introduce el identificador de un paciente para consultar su historial de dispensaciones. Los filtros activos se aplican a la búsqueda.
+                                </div>
+
+                                <h2 style={{marginBottom: '20px', color: '#667eea'}}>🔍 Histórico por paciente</h2>
+
+                                <div style={{
+                                    background: '#f5f7fa',
+                                    borderRadius: '15px',
+                                    padding: '30px',
+                                    maxWidth: '600px',
+                                    margin: '0 auto',
+                                    marginBottom: '30px'
+                                }}>
+                                    <label style={{
+                                        display: 'block',
+                                        marginBottom: '10px',
+                                        fontWeight: '600',
+                                        color: '#2b2f49',
+                                        fontSize: '1.1em'
+                                    }}>
+                                        Identificador del paciente
+                                    </label>
+                                    <div style={{display: 'flex', gap: '10px'}}>
+                                        <input
+                                            type="text"
+                                            value={patientId}
+                                            onChange={(e) => setPatientId(e.target.value)}
+                                            placeholder="Introduce la ID del paciente..."
+                                            style={{
+                                                flex: 1,
+                                                padding: '12px 16px',
+                                                fontSize: '1.1em',
+                                                border: '2px solid #667eea',
+                                                borderRadius: '10px',
+                                                outline: 'none',
+                                                transition: 'border-color 0.3s ease'
+                                            }}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter' && patientId.trim()) {
+                                                    searchPatient();
+                                                }
+                                            }}
+                                            disabled={!data}
+                                        />
+                                        <button
+                                            onClick={() => searchPatient()}
+                                            disabled={!data || !patientId.trim()}
+                                            style={{
+                                                padding: '12px 24px',
+                                                background: (!data || !patientId.trim()) ? '#ccc' : '#667eea',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '10px',
+                                                fontSize: '1.1em',
+                                                fontWeight: '600',
+                                                cursor: (!data || !patientId.trim()) ? 'not-allowed' : 'pointer',
+                                                transition: 'all 0.3s ease'
+                                            }}
+                                        >
+                                            Buscar
+                                        </button>
+                                    </div>
+                                    {!data && (
+                                        <p style={{marginTop: '10px', color: '#e74c3c', fontSize: '0.9em'}}>
+                                            ⚠️ Debes cargar un archivo de datos primero.
+                                        </p>
+                                    )}
+                                </div>
+
+                                {/* Resultados del paciente */}
+                                {patientResults && !patientResults.found && (
+                                    <div className="alert" style={{background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '10px', padding: '15px', marginTop: '20px'}}>
+                                        ⚠️ No se encontraron dispensaciones para el paciente con Id <strong>{patientResults.id}</strong> con los filtros actuales.
+                                    </div>
+                                )}
+
+                                {patientResults && patientResults.found && (
+                                    <div style={{marginTop: '10px'}}>
+                                        <h3 style={{color: '#2b2f49', marginBottom: '15px'}}>
+                                            Historial del paciente <span style={{color: '#667eea'}}>{patientResults.id}</span>
+                                            <span style={{fontSize: '0.8em', color: '#666', marginLeft: '15px'}}>
+                                                ({patientResults.dispensaciones.length} dispensaciones)
+                                            </span>
+                                        </h3>
+
+                                        {patientResults.tratamientos.map((tto, ttoIndex) => (
+                                            <div key={ttoIndex} style={{marginBottom: '30px'}}>
+                                                {patientResults.multipleTratamientos && (
+                                                    <h4 style={{
+                                                        color: '#764ba2',
+                                                        marginBottom: '10px',
+                                                        padding: '8px 15px',
+                                                        background: '#f0e6ff',
+                                                        borderRadius: '8px',
+                                                        borderLeft: '4px solid #764ba2'
+                                                    }}>
+                                                        Tratamiento {ttoIndex + 1}: {tto.principioActivo}
+                                                    </h4>
+                                                )}
+
+                                                <div style={{overflowX: 'auto'}}>
+                                                    <table style={{
+                                                        width: '100%',
+                                                        borderCollapse: 'collapse',
+                                                        fontSize: '0.9em',
+                                                        boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+                                                        borderRadius: '10px',
+                                                        overflow: 'hidden'
+                                                    }}>
+                                                        <thead>
+                                                            <tr style={{background: '#2b2f49', color: 'white'}}>
+                                                                <th style={{padding: '12px 15px', textAlign: 'left'}}>Fecha</th>
+                                                                <th style={{padding: '12px 15px', textAlign: 'left'}}>Medicamento</th>
+                                                                <th style={{padding: '12px 15px', textAlign: 'right'}}>Cantidad</th>
+                                                                <th style={{padding: '12px 15px', textAlign: 'right'}}>Coste</th>
+                                                                <th style={{padding: '12px 15px', textAlign: 'left'}}>Servicio</th>
+                                                                <th style={{padding: '12px 15px', textAlign: 'left'}}>Patología</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {tto.dispensaciones.map((row, idx) => (
+                                                                <tr key={idx} style={{
+                                                                    background: idx % 2 === 0 ? '#ffffff' : '#f8f9fa',
+                                                                    borderBottom: '1px solid #eee'
+                                                                }}>
+                                                                    <td style={{padding: '10px 15px', whiteSpace: 'nowrap'}}>
+                                                                        {row['Fecha Dispensación'] ? row['Fecha Dispensación'].toLocaleDateString('es-ES') : '-'}
+                                                                    </td>
+                                                                    <td style={{padding: '10px 15px'}}>
+                                                                        {row['Descripción Producto Dispensado'] || '-'}
+                                                                    </td>
+                                                                    <td style={{padding: '10px 15px', textAlign: 'right'}}>
+                                                                        {row['Cantidad'] || '-'}
+                                                                    </td>
+                                                                    <td style={{padding: '10px 15px', textAlign: 'right', whiteSpace: 'nowrap'}}>
+                                                                        {(parseFloat(row['Coste Dispensación']) || 0).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €
+                                                                    </td>
+                                                                    <td style={{padding: '10px 15px'}}>
+                                                                        {row['Servicio Prescriptor'] || '-'}
+                                                                    </td>
+                                                                    <td style={{padding: '10px 15px'}}>
+                                                                        {row['Patología'] || '-'}
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+
+                                                {/* Resumen del tratamiento */}
+                                                <div style={{
+                                                    marginTop: '15px',
+                                                    padding: '20px',
+                                                    background: '#f5f7fa',
+                                                    borderRadius: '10px',
+                                                    display: 'grid',
+                                                    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                                                    gap: '15px'
+                                                }}>
+                                                    <div style={{textAlign: 'center'}}>
+                                                        <div style={{fontSize: '0.85em', color: '#666', marginBottom: '5px'}}>Total unidades</div>
+                                                        <div style={{fontSize: '1.4em', fontWeight: '700', color: '#2b2f49'}}>{tto.totalUnidades.toLocaleString('es-ES')}</div>
+                                                    </div>
+                                                    <div style={{textAlign: 'center'}}>
+                                                        <div style={{fontSize: '0.85em', color: '#666', marginBottom: '5px'}}>Coste total</div>
+                                                        <div style={{fontSize: '1.4em', fontWeight: '700', color: '#2b2f49'}}>{tto.totalCoste.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €</div>
+                                                    </div>
+                                                    <div style={{textAlign: 'center'}}>
+                                                        <div style={{fontSize: '0.85em', color: '#666', marginBottom: '5px'}}>Adherencia (MPR)</div>
+                                                        {tto.adherencia !== null ? (
+                                                            <div style={{
+                                                                fontSize: '1.4em',
+                                                                fontWeight: '700',
+                                                                color: tto.adherencia >= 80 ? '#28a745' : tto.adherencia >= 50 ? '#ffc107' : '#dc3545'
+                                                            }}>
+                                                                {tto.adherencia.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})}%
+                                                                <div style={{fontSize: '0.5em', fontWeight: '400', color: '#666', marginTop: '3px'}}>
+                                                                    {tto.diasCubiertos} días cubiertos / {tto.diasTotales} días totales
+                                                                </div>
+                                                            </div>
+                                                        ) : (
+                                                            <div style={{fontSize: '0.85em', color: '#999', fontStyle: 'italic'}}>
+                                                                {tto.adherenciaMotivo}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+
+                                        {/* Resumen global si hay múltiples tratamientos */}
+                                        {patientResults.multipleTratamientos && (
+                                            <div style={{
+                                                marginTop: '20px',
+                                                padding: '20px',
+                                                background: '#667eea',
+                                                borderRadius: '10px',
+                                                color: 'white'
+                                            }}>
+                                                <h4 style={{marginBottom: '15px'}}>Resumen global del paciente</h4>
+                                                <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px'}}>
+                                                    <div style={{textAlign: 'center'}}>
+                                                        <div style={{fontSize: '0.85em', opacity: 0.8, marginBottom: '5px'}}>Total dispensaciones</div>
+                                                        <div style={{fontSize: '1.4em', fontWeight: '700'}}>{patientResults.dispensaciones.length}</div>
+                                                    </div>
+                                                    <div style={{textAlign: 'center'}}>
+                                                        <div style={{fontSize: '0.85em', opacity: 0.8, marginBottom: '5px'}}>Total unidades</div>
+                                                        <div style={{fontSize: '1.4em', fontWeight: '700'}}>{patientResults.totalUnidades.toLocaleString('es-ES')}</div>
+                                                    </div>
+                                                    <div style={{textAlign: 'center'}}>
+                                                        <div style={{fontSize: '0.85em', opacity: 0.8, marginBottom: '5px'}}>Coste total</div>
+                                                        <div style={{fontSize: '1.4em', fontWeight: '700'}}>{patientResults.totalCoste.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €</div>
+                                                    </div>
+                                                    <div style={{textAlign: 'center'}}>
+                                                        <div style={{fontSize: '0.85em', opacity: 0.8, marginBottom: '5px'}}>Tratamientos</div>
+                                                        <div style={{fontSize: '1.4em', fontWeight: '700'}}>{patientResults.tratamientos.length}</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Devoluciones (cantidades negativas) */}
+                                        {patientResults.devoluciones && patientResults.devoluciones.length > 0 && (
+                                            <div style={{marginTop: '30px'}}>
+                                                <h4 style={{
+                                                    color: '#e67e22',
+                                                    marginBottom: '10px',
+                                                    padding: '8px 15px',
+                                                    background: '#fef9e7',
+                                                    borderRadius: '8px',
+                                                    borderLeft: '4px solid #e67e22'
+                                                }}>
+                                                    Devoluciones registradas ({patientResults.devoluciones.length})
+                                                </h4>
+                                                <p style={{fontSize: '0.85em', color: '#888', marginBottom: '10px', fontStyle: 'italic'}}>
+                                                    Las siguientes dispensaciones con cantidad negativa no se han incluido en los cálculos anteriores.
+                                                </p>
+                                                <div style={{overflowX: 'auto'}}>
+                                                    <table style={{
+                                                        width: '100%',
+                                                        borderCollapse: 'collapse',
+                                                        fontSize: '0.85em',
+                                                        boxShadow: '0 1px 5px rgba(0,0,0,0.08)',
+                                                        borderRadius: '8px',
+                                                        overflow: 'hidden'
+                                                    }}>
+                                                        <thead>
+                                                            <tr style={{background: '#e67e22', color: 'white'}}>
+                                                                <th style={{padding: '10px 12px', textAlign: 'left'}}>Fecha</th>
+                                                                <th style={{padding: '10px 12px', textAlign: 'left'}}>Medicamento</th>
+                                                                <th style={{padding: '10px 12px', textAlign: 'right'}}>Cantidad</th>
+                                                                <th style={{padding: '10px 12px', textAlign: 'right'}}>Coste</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            {patientResults.devoluciones.map((row, idx) => (
+                                                                <tr key={idx} style={{
+                                                                    background: idx % 2 === 0 ? '#fff8f0' : '#fef5e7',
+                                                                    borderBottom: '1px solid #f0e0c0'
+                                                                }}>
+                                                                    <td style={{padding: '8px 12px', whiteSpace: 'nowrap'}}>
+                                                                        {row['Fecha Dispensación'] ? row['Fecha Dispensación'].toLocaleDateString('es-ES') : '-'}
+                                                                    </td>
+                                                                    <td style={{padding: '8px 12px'}}>
+                                                                        {row['Descripción Producto Dispensado'] || '-'}
+                                                                    </td>
+                                                                    <td style={{padding: '8px 12px', textAlign: 'right', color: '#c0392b', fontWeight: '600'}}>
+                                                                        {row['Cantidad'] || '-'}
+                                                                    </td>
+                                                                    <td style={{padding: '8px 12px', textAlign: 'right', whiteSpace: 'nowrap', color: '#c0392b'}}>
+                                                                        {(parseFloat(row['Coste Dispensación']) || 0).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </>
                         )}
 
