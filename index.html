@@ -2,8 +2,9 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Analizador de dispensaciones farmacéuticas en IMID - V15</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#1a5276">
+    <title>Dashboard analizador de dispensaciones IMID - V17</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -12,6 +13,21 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
+        /* ── Variables EMB ── */
+        :root {
+            --azul:        #1a5276;
+            --azul-claro:  #2980b9;
+            --gris-fondo:  #f4f6f9;
+            --gris-borde:  #dce1e8;
+            --blanco:      #ffffff;
+            --texto:       #2c3e50;
+            --texto-sec:   #5d6d7e;
+            --verde:       #27ae60;
+            --rojo:        #c0392b;
+            --naranja:     #e67e22;
+            --radius:      8px;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -19,61 +35,81 @@
         }
 
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: #585c70;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--gris-fondo);
             min-height: 100vh;
-            padding: 20px;
+            line-height: 1.5;
+            -webkit-text-size-adjust: 100%;
         }
 
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+            background: var(--blanco);
             overflow: hidden;
         }
 
+        /* ── HEADER ── */
         .header {
-            background: #2b2f49;
+            background: var(--azul);
             color: white;
-            padding: 30px;
-            text-align: center;
+            padding: 1rem 2rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
         }
 
+        .header-text { flex: 1; }
+
         .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
+            font-size: 1.4rem;
             font-weight: 600;
+            margin-bottom: 2px;
         }
 
         .header p {
-            font-size: 1.1em;
-            opacity: 0.9;
+            font-size: 0.85rem;
+            opacity: 0.8;
         }
+
+        .btn-info-header {
+            background: rgba(255,255,255,0.15);
+            border: 1px solid rgba(255,255,255,0.4);
+            color: white;
+            border-radius: var(--radius);
+            padding: 0.4rem 0.8rem;
+            cursor: pointer;
+            font-size: 0.85rem;
+            margin-left: auto;
+            transition: background 0.2s;
+        }
+
+        .btn-info-header:hover { background: rgba(255,255,255,0.25); }
 
         .main-content {
-            padding: 30px;
+            padding: 1.5rem;
         }
 
+        /* ── UPLOAD ── */
         .upload-section {
-            background: #f5f7fa;
-            border-radius: 15px;
+            background: var(--gris-fondo);
+            border-radius: var(--radius);
             padding: 5px;
             text-align: center;
             margin-bottom: 10px;
-            border: 3px dashed #667eea;
+            border: 2px dashed var(--azul-claro);
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.2s ease;
         }
 
         .upload-section:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
         }
 
         .upload-section.dragover {
-            background: #667eea;
+            background: var(--azul-claro);
             color: white;
         }
 
@@ -83,34 +119,36 @@
         }
 
         .file-loaded {
-            background: #e8f5e9;
-            border-color: #28a745;
+            background: #d5f5e3;
+            border-color: var(--verde);
         }
 
+        /* ── MENU GRID ── */
         .menu-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
         }
 
         .menu-button {
-            background: #3d4268;
+            background: var(--azul);
             color: white;
             border: none;
             padding: 10px;
-            border-radius: 15px;
-            font-size: 1em;
-            font-weight: 300;
+            border-radius: var(--radius);
+            font-size: 0.9rem;
+            font-weight: 500;
             cursor: pointer;
-            transition: all 0.3s ease;
-            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+            transition: all 0.2s ease;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.12);
             text-align: left;
         }
 
         .menu-button:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+            background: var(--azul-claro);
+            transform: translateY(-1px);
+            box-shadow: 0 3px 10px rgba(0,0,0,0.15);
         }
 
         .menu-button:disabled {
@@ -125,77 +163,86 @@
             opacity: 0.8;
         }
 
+        /* ── RESULTS ── */
         .results-section {
-            margin-top: 30px;
-            animation: fadeIn 0.5s ease;
+            margin-top: 1.5rem;
+            animation: fadeIn 0.4s ease;
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(20px); }
+            from { opacity: 0; transform: translateY(16px); }
             to { opacity: 1; transform: translateY(0); }
         }
 
         .results-header {
-            background: #2b2f49;
+            background: var(--azul);
             color: white;
-            padding: 20px;
-            border-radius: 10px 10px 0 0;
+            padding: 1rem 1.25rem;
+            border-radius: var(--radius) var(--radius) 0 0;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
 
         .results-header h2 {
-            font-size: 1.5em;
+            font-size: 1.1rem;
+            font-weight: 700;
         }
 
         .export-buttons {
             display: flex;
-            gap: 10px;
+            gap: 0.5rem;
         }
 
         .export-btn {
             background: white;
-            color: #667eea;
+            color: var(--azul);
             border: none;
-            padding: 10px 20px;
-            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            border-radius: var(--radius);
             font-weight: 600;
+            font-size: 0.85rem;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.2s ease;
         }
 
         .export-btn:hover {
-            transform: scale(1.05);
+            background: var(--gris-fondo);
             box-shadow: 0 2px 6px rgba(0,0,0,0.1);
         }
 
+        /* ── TABLES ── */
         .table-container {
             overflow-x: auto;
-            background: white;
-            border-radius: 0 0 10px 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            background: var(--blanco);
+            border-radius: 0 0 var(--radius) var(--radius);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
         }
 
         table {
             width: 100%;
             border-collapse: collapse;
+            font-size: 0.85rem;
         }
 
         th {
-            background: #f8f9fa;
-            padding: 15px;
+            background: var(--gris-fondo);
+            padding: 0.5rem 0.65rem;
             text-align: left;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            color: var(--texto-sec);
+            letter-spacing: 0.03em;
             font-weight: 600;
-            color: #667eea;
-            border-bottom: 2px solid #667eea;
+            border-bottom: 2px solid var(--azul-claro);
             position: sticky;
             top: 0;
         }
 
         td {
-            padding: 12px 15px;
-            border-bottom: 1px solid #e9ecef;
+            padding: 0.5rem 0.65rem;
+            border-bottom: 1px solid var(--gris-borde);
+            color: var(--texto);
         }
 
         th:first-child,
@@ -216,48 +263,59 @@
         }
 
         tr:hover {
-            background: #f8f9fa;
+            background: var(--gris-fondo);
         }
 
+        .total-row {
+            background: var(--gris-fondo);
+            font-weight: 700;
+            border-top: 2px solid var(--azul-claro);
+        }
+
+        /* ── STAT CARDS ── */
         .stat-cards {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
         }
 
         .stat-card {
-            background: #667eea;
+            background: var(--azul);
             color: white;
-            padding: 25px;
-            border-radius: 15px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+            padding: 1.25rem;
+            border-radius: var(--radius);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
         }
 
         .stat-card .label {
-            font-size: 0.9em;
-            opacity: 0.9;
-            margin-bottom: 10px;
+            font-size: 0.75rem;
+            opacity: 0.85;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.03em;
         }
 
         .stat-card .value {
-            font-size: 2.5em;
+            font-size: 2.2em;
             font-weight: 700;
         }
 
+        /* ── LOADING / SPINNER ── */
         .loading {
             text-align: center;
-            padding: 40px;
+            padding: 3rem 1rem;
         }
 
         .spinner {
-            border: 4px solid #f3f3f3;
-            border-top: 4px solid #667eea;
+            border: 4px solid var(--gris-borde);
+            border-top: 4px solid var(--azul-claro);
             border-radius: 50%;
-            width: 50px;
-            height: 50px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
+            width: 48px;
+            height: 48px;
+            animation: spin 0.6s linear infinite;
+            margin: 0 auto 1rem;
         }
 
         @keyframes spin {
@@ -265,36 +323,39 @@
             100% { transform: rotate(360deg); }
         }
 
+        /* ── ALERTS ── */
         .alert {
-            padding: 15px 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
+            padding: 0.8rem 1rem;
+            border-radius: var(--radius);
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
         }
 
         .alert-info {
-            background: #d1ecf1;
-            color: #0c5460;
-            border-left: 4px solid #17a2b8;
+            background: #d6eaf8;
+            color: var(--azul);
+            border-left: 4px solid var(--azul-claro);
         }
 
         .alert-warning {
-            background: #fff3cd;
-            color: #856404;
-            border-left: 4px solid #ffc107;
+            background: #fdebd0;
+            color: #b9770e;
+            border-left: 4px solid var(--naranja);
         }
 
         .alert-success {
-            background: #d4edda;
-            color: #155724;
-            border-left: 4px solid #28a745;
+            background: #d5f5e3;
+            color: #1e8449;
+            border-left: 4px solid var(--verde);
         }
 
+        /* ── CHARTS ── */
         .chart-container {
-            margin: 30px 0;
-            padding: 20px;
-            background: white;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            margin: 1.5rem 0;
+            padding: 1.25rem;
+            background: var(--blanco);
+            border-radius: var(--radius);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
         }
 
         canvas {
@@ -306,240 +367,311 @@
             font-weight: 600;
         }
 
-        .total-row {
-            background: #f8f9fa;
-            font-weight: 700;
-            border-top: 2px solid #667eea;
-        }
-
         input[type="file"] {
             display: none;
         }
 
+        /* ── FILTERS ── */
         .filters-section {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
+            background: var(--blanco);
+            padding: 1.25rem;
+            border-radius: var(--radius);
+            margin-bottom: 1rem;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
         }
 
         .filters-section h3 {
-            margin-bottom: 15px;
-            color: #667eea;
+            margin-bottom: 1rem;
+            color: var(--azul);
+            font-size: 1rem;
+            font-weight: 700;
         }
 
         .filter-group {
-            margin-bottom: 15px;
+            margin-bottom: 0.75rem;
         }
 
         .filter-group label {
             display: block;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
             font-weight: 600;
-            color: #495057;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: var(--texto-sec);
         }
 
         .filter-group select,
         .filter-group input {
             width: 100%;
-            padding: 10px;
-            border: 2px solid #e9ecef;
-            border-radius: 8px;
-            font-size: 1em;
+            padding: 0.5rem 0.65rem;
+            border: 1px solid var(--gris-borde);
+            border-radius: var(--radius);
+            font-size: 0.9rem;
+            background: var(--blanco);
+            color: var(--texto);
         }
 
         .filter-group select:focus,
         .filter-group input:focus {
             outline: none;
-            border-color: #667eea;
+            border-color: var(--azul-claro);
+            box-shadow: 0 0 0 3px rgba(41,128,185,0.15);
         }
-    
-        /* Dashboard Styles - AÑADIDO */
+
+        /* ── VIEW TOGGLE ── */
         .view-toggle {
             display: flex;
             justify-content: center;
-            gap: 15px;
-            margin-bottom: 25px;
-            padding: 15px;
-            background: #f0f2f5;
-            border-radius: 12px;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+            padding: 0.75rem;
+            background: var(--gris-fondo);
+            border-radius: var(--radius);
         }
-        
+
         .toggle-btn {
-            padding: 12px 35px;
-            font-size: 1.05em;
+            padding: 0.6rem 1.4rem;
+            font-size: 0.95rem;
             font-weight: 600;
-            border: 2px solid transparent;
-            border-radius: 8px;
+            border: 2px solid var(--gris-borde);
+            border-radius: var(--radius);
             cursor: pointer;
-            transition: all 0.3s ease;
-            background: white;
-            color: #495057;
+            transition: all 0.2s ease;
+            background: var(--blanco);
+            color: var(--texto-sec);
         }
-        
+
         .toggle-btn.active {
-            background: #667eea;
+            background: var(--azul-claro);
             color: white;
-            border-color: #667eea;
+            border-color: var(--azul-claro);
         }
-        
+
         .toggle-btn:hover:not(.active) {
-            background: #e9ecef;
-            transform: translateY(-2px);
+            border-color: var(--azul-claro);
+            color: var(--azul);
+            transform: translateY(-1px);
         }
-        
+
+        /* ── DASHBOARD KPIs ── */
         .dashboard-kpis {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
         }
-        
+
         .kpi-card {
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            transition: transform 0.3s ease;
+            background: var(--blanco);
+            padding: 1.25rem;
+            border-radius: var(--radius);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+            border-left: 4px solid var(--azul-claro);
+            transition: transform 0.2s ease;
         }
 
         .kpi-card:hover {
             transform: translateY(-2px);
+            box-shadow: 0 3px 10px rgba(0,0,0,0.1);
         }
-        
+
         .kpi-card.primary {
-            background: #667eea;
+            background: var(--azul);
             color: white;
+            border-left-color: var(--azul-claro);
         }
 
         .kpi-card.success {
-            background: #e8f5e9;
-            color: #155724;
+            background: #d5f5e3;
+            color: #1e8449;
+            border-left-color: var(--verde);
         }
 
         .kpi-card.warning {
-            background: #fff3cd;
-            color: #856404;
+            background: #fdebd0;
+            color: #b9770e;
+            border-left-color: var(--naranja);
         }
 
         .kpi-card.info {
-            background: #e3f2fd;
-            color: #004085;
+            background: #d6eaf8;
+            color: var(--azul);
+            border-left-color: var(--azul-claro);
         }
-        
+
         .kpi-label {
-            font-size: 0.85em;
-            margin-bottom: 8px;
-            opacity: 0.85;
+            font-size: 0.75rem;
+            margin-bottom: 6px;
             text-transform: uppercase;
             font-weight: 600;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.03em;
+            opacity: 0.85;
         }
-        
+
         .kpi-value {
-            font-size: 2.5em;
+            font-size: 2.2em;
             font-weight: 700;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
         }
-        
+
         .kpi-subtitle {
-            font-size: 0.8em;
+            font-size: 0.78rem;
             opacity: 0.75;
         }
-        
+
+        /* ── DASHBOARD CHARTS ── */
         .dashboard-charts {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
-            gap: 25px;
-            margin-bottom: 25px;
+            gap: 1.25rem;
+            margin-bottom: 1.25rem;
         }
-        
+
         .chart-card {
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+            background: var(--blanco);
+            padding: 1.25rem;
+            border-radius: var(--radius);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
         }
-        
+
         .chart-card.full-width {
             grid-column: 1 / -1;
         }
-        
+
         .chart-title {
-            font-size: 1.2em;
-            font-weight: 600;
-            margin-bottom: 18px;
-            color: #667eea;
+            font-size: 1rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: var(--azul);
         }
-        
+
+        /* ── RANKING ── */
         .dashboard-ranking {
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            margin-bottom: 25px;
+            background: var(--blanco);
+            padding: 1.25rem;
+            border-radius: var(--radius);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+            margin-bottom: 1.25rem;
         }
-        
+
         .ranking-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 12px;
-            border-bottom: 1px solid #e9ecef;
+            padding: 0.6rem 0.5rem;
+            border-bottom: 1px solid var(--gris-borde);
         }
-        
-        .ranking-item:last-child {
-            border-bottom: none;
-        }
-        
-        .ranking-item:hover {
-            background: #f8f9fa;
-        }
-        
+
+        .ranking-item:last-child { border-bottom: none; }
+
+        .ranking-item:hover { background: var(--gris-fondo); }
+
         .ranking-rank {
-            font-size: 1.4em;
+            font-size: 1.3em;
             font-weight: 700;
-            color: #667eea;
+            color: var(--azul-claro);
             width: 35px;
         }
-        
+
         .ranking-name {
             flex: 1;
             font-weight: 600;
-            margin: 0 15px;
-        }
-        
-        .ranking-value {
-            font-size: 1.1em;
-            font-weight: 700;
-            color: #495057;
-        }
-        
-        @media (max-width: 768px) {
-            .dashboard-charts {
-                grid-template-columns: 1fr;
-            }
-            .dashboard-kpis {
-                grid-template-columns: 1fr;
-            }
-            .view-toggle {
-                flex-direction: column;
-            }
+            margin: 0 1rem;
+            color: var(--texto);
+            font-size: 0.9rem;
         }
 
-    
-        .analysis-chart-container {
-            background: white;
-            padding: 25px;
-            border-radius: 10px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            margin-bottom: 20px;
+        .ranking-value {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--texto-sec);
         }
-        
+
+        /* ── ANALYSIS CHARTS ── */
+        .analysis-chart-container {
+            background: var(--blanco);
+            padding: 1.25rem;
+            border-radius: var(--radius);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+            margin-bottom: 1rem;
+        }
+
         .analysis-chart-container canvas {
             max-height: 450px;
         }
 
+        /* ── MODAL ── */
+        .modal-overlay {
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.45);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-box {
+            background: var(--blanco);
+            border-radius: var(--radius);
+            max-width: 480px; width: 90%;
+            padding: 1.5rem;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+        }
+
+        .modal-box h2 {
+            color: var(--azul);
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+        }
+
+        .modal-box p {
+            font-size: 0.9rem;
+            color: var(--texto);
+            margin-bottom: 0.75rem;
+            line-height: 1.5;
+        }
+
+        .modal-footer {
+            border-top: 1px solid var(--gris-borde);
+            margin-top: 1rem;
+            padding-top: 0.75rem;
+            font-size: 0.8rem;
+            color: var(--texto-sec);
+            text-align: center;
+        }
+
+        .modal-footer a {
+            color: var(--azul-claro);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .modal-footer a:hover { text-decoration: underline; }
+
+        .btn-close-modal {
+            display: block;
+            width: 100%;
+            margin-top: 1rem;
+            padding: 0.6rem;
+            background: var(--azul-claro);
+            color: white;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .btn-close-modal:hover { background: var(--azul); }
+
+        /* ── RESPONSIVE ── */
+        @media (max-width: 600px) {
+            .header { padding: 0.8rem 1rem; flex-wrap: wrap; }
+            .main-content { padding: 1rem; }
+            .dashboard-charts { grid-template-columns: 1fr; }
+            .dashboard-kpis { grid-template-columns: 1fr; }
+            .view-toggle { flex-direction: column; }
+            .menu-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
@@ -572,6 +704,8 @@
             const [dragOver, setDragOver] = useState(false);
             const [reportLoading, setReportLoading] = useState(false);
             const [reportGenerated, setReportGenerated] = useState(false);
+            const [showInfoModal, setShowInfoModal] = useState(false);
+            const [analysisGranularity, setAnalysisGranularity] = useState('total'); // 'total', 'years', 'quarters', 'months'
             const [filters, setFilters] = useState({
                 year: '',
                 service: '',
@@ -615,8 +749,8 @@
                                     {
                                         label: 'Pacientes',
                                         data: evolutionData.pacientes,
-                                        borderColor: '#667eea',
-                                        backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                                        borderColor: '#2980b9',
+                                        backgroundColor: 'rgba(41, 128, 185, 0.1)',
                                         tension: 0.4,
                                         fill: true,
                                         borderWidth: 3
@@ -661,8 +795,8 @@
                                 datasets: [{
                                     label: 'Pacientes',
                                     data: topPA.map(item => item.pacientes),
-                                    backgroundColor: 'rgba(102, 126, 234, 0.8)',
-                                    borderColor: '#667eea',
+                                    backgroundColor: 'rgba(41, 128, 185, 0.85)',
+                                    borderColor: '#2980b9',
                                     borderWidth: 2
                                 }]
                             },
@@ -687,12 +821,12 @@
                                 datasets: [{
                                     data: serviceData.map(item => item.count),
                                     backgroundColor: [
-                                        'rgba(102, 126, 234, 0.8)',
-                                        'rgba(132, 250, 176, 0.8)',
-                                        'rgba(252, 182, 159, 0.8)',
-                                        'rgba(168, 237, 234, 0.8)',
-                                        'rgba(118, 75, 162, 0.8)',
-                                        'rgba(143, 211, 244, 0.8)'
+                                        'rgba(41, 128, 185, 0.85)',
+                                        'rgba(39, 174, 96, 0.8)',
+                                        'rgba(230, 126, 34, 0.8)',
+                                        'rgba(26, 82, 118, 0.7)',
+                                        'rgba(41, 128, 185, 0.6)',
+                                        'rgba(93, 109, 126, 0.7)'
                                     ],
                                     borderWidth: 2
                                 }]
@@ -1094,7 +1228,7 @@
                             datasets: [{
                                 label: 'Totales',
                                 data: [results.data[0].Pacientes, results.data[0].Visitas, results.data[0].Dispensaciones],
-                                backgroundColor: ['rgba(102, 126, 234, 0.8)', 'rgba(132, 250, 176, 0.8)', 'rgba(252, 182, 159, 0.8)'],
+                                backgroundColor: ['rgba(41, 128, 185, 0.85)', 'rgba(39, 174, 96, 0.8)', 'rgba(230, 126, 34, 0.8)'],
                                 borderWidth: 2
                             }]
                         },
@@ -1111,7 +1245,7 @@
                         data: {
                             labels: results.data.map(row => row.Periodo),
                             datasets: [
-                                { label: 'Pacientes', data: results.data.map(row => row.Pacientes), borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', tension: 0.4, fill: true, borderWidth: 3 },
+                                { label: 'Pacientes', data: results.data.map(row => row.Pacientes), borderColor: '#2980b9', backgroundColor: 'rgba(41, 128, 185, 0.1)', tension: 0.4, fill: true, borderWidth: 3 },
                                 { label: 'Visitas', data: results.data.map(row => row.Visitas), borderColor: '#84fab0', backgroundColor: 'rgba(132, 250, 176, 0.1)', tension: 0.4, fill: true, borderWidth: 3 },
                                 { label: 'Dispensaciones', data: results.data.map(row => row.Dispensaciones), borderColor: '#fcb69f', backgroundColor: 'rgba(252, 182, 159, 0.1)', tension: 0.4, fill: true, borderWidth: 2 }
                             ]
@@ -1132,7 +1266,7 @@
                         type: 'bar',
                         data: {
                             labels: labels,
-                            datasets: [{ label: 'Pacientes', data: totals, backgroundColor: 'rgba(102, 126, 234, 0.8)', borderColor: '#667eea', borderWidth: 2 }]
+                            datasets: [{ label: 'Pacientes', data: totals, backgroundColor: 'rgba(41, 128, 185, 0.85)', borderColor: '#2980b9', borderWidth: 2 }]
                         },
                         options: {
                             responsive: true,
@@ -1193,7 +1327,7 @@
                             datasets: [{ 
                                 label: 'Coste (€)', 
                                 data: sorted.map(item => item[1].coste), 
-                                backgroundColor: 'rgba(252, 182, 159, 0.8)', 
+                                backgroundColor: 'rgba(230, 126, 34, 0.8)', 
                                 borderColor: '#fcb69f', 
                                 borderWidth: 2 
                             }]
@@ -1232,8 +1366,8 @@
                             datasets: [{
                                 label: 'Coste/Paciente (€)',
                                 data: costPerPatient,
-                                backgroundColor: 'rgba(102, 126, 234, 0.8)',
-                                borderColor: '#667eea',
+                                backgroundColor: 'rgba(41, 128, 185, 0.85)',
+                                borderColor: '#2980b9',
                                 borderWidth: 2
                             }]
                         },
@@ -1312,14 +1446,14 @@
                                 {
                                     label: '% Var. Pacientes',
                                     data: varPacientes,
-                                    backgroundColor: 'rgba(102, 126, 234, 0.8)',
-                                    borderColor: '#667eea',
+                                    backgroundColor: 'rgba(41, 128, 185, 0.85)',
+                                    borderColor: '#2980b9',
                                     borderWidth: 2
                                 },
                                 {
                                     label: '% Var. Coste',
                                     data: varCoste,
-                                    backgroundColor: 'rgba(252, 182, 159, 0.8)',
+                                    backgroundColor: 'rgba(230, 126, 34, 0.8)',
                                     borderColor: '#fcb69f',
                                     borderWidth: 2
                                 }
@@ -1861,7 +1995,7 @@
                         data: {
                             labels: chartData.yearData.data.map(r => r.Periodo),
                             datasets: [
-                                { label: 'Pacientes', data: chartData.yearData.data.map(r => r.Pacientes), borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', borderWidth: 2, tension: 0.4, fill: true },
+                                { label: 'Pacientes', data: chartData.yearData.data.map(r => r.Pacientes), borderColor: '#2980b9', backgroundColor: 'rgba(41, 128, 185, 0.1)', borderWidth: 2, tension: 0.4, fill: true },
                                 { label: 'Visitas', data: chartData.yearData.data.map(r => r.Visitas), borderColor: '#84fab0', backgroundColor: 'rgba(132, 250, 176, 0.1)', borderWidth: 2, tension: 0.4, fill: true },
                                 { label: 'Dispensaciones', data: chartData.yearData.data.map(r => r.Dispensaciones), borderColor: '#fcb69f', backgroundColor: 'rgba(252, 182, 159, 0.1)', borderWidth: 2, tension: 0.4, fill: true }
                             ]
@@ -1892,7 +2026,7 @@
 
                     const topPA = chartData.paData.data.slice(0, 8);
                     const yearsPA = [...new Set(chartData.paData.data.flatMap(row => Object.keys(row).filter(k => k !== 'Principio Activo' && k !== 'TOTAL')))].sort();
-                    const colorsPA = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
+                    const colorsPA = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
 
                     const chart2 = new Chart(canvas2, {
                         type: 'line',
@@ -1934,7 +2068,7 @@
 
                     const topBio = chartData.bioData.data.slice(0, 6);
                     const yearsBio = [...new Set(chartData.bioData.data.flatMap(row => Object.keys(row).filter(k => k !== 'Biosimilar' && k !== 'TOTAL')))].sort();
-                    const colorsBio = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
+                    const colorsBio = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
 
                     const chart3 = new Chart(canvas3, {
                         type: 'line',
@@ -1979,7 +2113,7 @@
                             datasets: [{
                                 label: 'Coste (€)',
                                 data: chartData.yearData.data.map(r => parseFloat(r.Coste)),
-                                backgroundColor: 'rgba(252, 182, 159, 0.8)',
+                                backgroundColor: 'rgba(230, 126, 34, 0.8)',
                                 borderColor: '#fcb69f',
                                 borderWidth: 1
                             }]
@@ -2017,8 +2151,8 @@
                             datasets: [{
                                 label: 'Coste/Paciente (€)',
                                 data: chartData.cpData.data.map(r => parseFloat(r['Coste/Paciente'])),
-                                backgroundColor: 'rgba(102, 126, 234, 0.8)',
-                                borderColor: '#667eea',
+                                backgroundColor: 'rgba(41, 128, 185, 0.85)',
+                                borderColor: '#2980b9',
                                 borderWidth: 1
                             }]
                         },
@@ -2051,7 +2185,7 @@
                         .map(row => ({ producto: row.Producto, total: parseFloat((row['TOTAL Coste'] || '0').replace(/\./g, '').replace(',', '.')) }))
                         .sort((a, b) => b.total - a.total)
                         .slice(0, 10);
-                    const colorsProd = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
+                    const colorsProd = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
 
                     const chart6 = new Chart(canvas6, {
                         type: 'line',
@@ -2208,7 +2342,7 @@
                         data: {
                             labels: chartData.quarterData.data.map(r => r.Periodo),
                             datasets: [
-                                { label: 'Pacientes', data: chartData.quarterData.data.map(r => r.Pacientes), borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', borderWidth: 2, tension: 0.4, fill: true },
+                                { label: 'Pacientes', data: chartData.quarterData.data.map(r => r.Pacientes), borderColor: '#2980b9', backgroundColor: 'rgba(41, 128, 185, 0.1)', borderWidth: 2, tension: 0.4, fill: true },
                                 { label: 'Visitas', data: chartData.quarterData.data.map(r => r.Visitas), borderColor: '#84fab0', backgroundColor: 'rgba(132, 250, 176, 0.1)', borderWidth: 2, tension: 0.4, fill: true },
                                 { label: 'Dispensaciones', data: chartData.quarterData.data.map(r => r.Dispensaciones), borderColor: '#fcb69f', backgroundColor: 'rgba(252, 182, 159, 0.1)', borderWidth: 2, tension: 0.4, fill: true }
                             ]
@@ -2239,7 +2373,7 @@
 
                     const topPA = chartData.paData.data.slice(0, 8);
                     const quartersPA = [...new Set(chartData.paData.data.flatMap(row => Object.keys(row).filter(k => k !== 'Principio Activo' && k !== 'TOTAL')))].sort();
-                    const colorsPA = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
+                    const colorsPA = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
 
                     const chart2 = new Chart(canvas2, {
                         type: 'line',
@@ -2281,7 +2415,7 @@
 
                     const topBio = chartData.bioData.data.slice(0, 6);
                     const quartersBio = [...new Set(chartData.bioData.data.flatMap(row => Object.keys(row).filter(k => k !== 'Biosimilar' && k !== 'TOTAL')))].sort();
-                    const colorsBio = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
+                    const colorsBio = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
 
                     const chart3 = new Chart(canvas3, {
                         type: 'line',
@@ -2326,7 +2460,7 @@
                             datasets: [{
                                 label: 'Coste (€)',
                                 data: chartData.quarterData.data.map(r => parseFloat(r.Coste)),
-                                backgroundColor: 'rgba(252, 182, 159, 0.8)',
+                                backgroundColor: 'rgba(230, 126, 34, 0.8)',
                                 borderColor: '#fcb69f',
                                 borderWidth: 1
                             }]
@@ -2364,8 +2498,8 @@
                             datasets: [{
                                 label: 'Coste/Paciente (€)',
                                 data: chartData.cpData.data.map(r => parseFloat(r['Coste/Paciente'])),
-                                backgroundColor: 'rgba(102, 126, 234, 0.8)',
-                                borderColor: '#667eea',
+                                backgroundColor: 'rgba(41, 128, 185, 0.85)',
+                                borderColor: '#2980b9',
                                 borderWidth: 1
                             }]
                         },
@@ -2398,7 +2532,7 @@
                         .map(row => ({ producto: row.Producto, total: parseFloat((row['TOTAL Coste'] || '0').replace(/\./g, '').replace(',', '.')) }))
                         .sort((a, b) => b.total - a.total)
                         .slice(0, 10);
-                    const colorsProd = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
+                    const colorsProd = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
 
                     const chart6 = new Chart(canvas6, {
                         type: 'line',
@@ -2555,7 +2689,7 @@
                         data: {
                             labels: chartData.monthData.data.map(r => r.Periodo),
                             datasets: [
-                                { label: 'Pacientes', data: chartData.monthData.data.map(r => r.Pacientes), borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', borderWidth: 2, tension: 0.4, fill: true },
+                                { label: 'Pacientes', data: chartData.monthData.data.map(r => r.Pacientes), borderColor: '#2980b9', backgroundColor: 'rgba(41, 128, 185, 0.1)', borderWidth: 2, tension: 0.4, fill: true },
                                 { label: 'Visitas', data: chartData.monthData.data.map(r => r.Visitas), borderColor: '#84fab0', backgroundColor: 'rgba(132, 250, 176, 0.1)', borderWidth: 2, tension: 0.4, fill: true },
                                 { label: 'Dispensaciones', data: chartData.monthData.data.map(r => r.Dispensaciones), borderColor: '#fcb69f', backgroundColor: 'rgba(252, 182, 159, 0.1)', borderWidth: 2, tension: 0.4, fill: true
                                 }
@@ -2587,7 +2721,7 @@
 
                     const topPA = chartData.paData.data.slice(0, 8);
                     const monthsPA = [...new Set(chartData.paData.data.flatMap(row => Object.keys(row).filter(k => k !== 'Principio Activo' && k !== 'TOTAL')))].sort();
-                    const colorsPA = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
+                    const colorsPA = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff'];
 
                     const chart2 = new Chart(canvas2, {
                         type: 'line',
@@ -2629,7 +2763,7 @@
 
                     const topBio = chartData.bioData.data.slice(0, 6);
                     const monthsBio = [...new Set(chartData.bioData.data.flatMap(row => Object.keys(row).filter(k => k !== 'Biosimilar' && k !== 'TOTAL')))].sort();
-                    const colorsBio = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
+                    const colorsBio = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
 
                     const chart3 = new Chart(canvas3, {
                         type: 'line',
@@ -2674,7 +2808,7 @@
                             datasets: [{
                                 label: 'Coste (€)',
                                 data: chartData.monthData.data.map(r => parseFloat(r.Coste)),
-                                backgroundColor: 'rgba(252, 182, 159, 0.8)',
+                                backgroundColor: 'rgba(230, 126, 34, 0.8)',
                                 borderColor: '#fcb69f',
                                 borderWidth: 1
                             }]
@@ -2712,8 +2846,8 @@
                             datasets: [{
                                 label: 'Coste/Paciente (€)',
                                 data: chartData.cpData.data.map(r => parseFloat(r['Coste/Paciente'])),
-                                backgroundColor: 'rgba(102, 126, 234, 0.8)',
-                                borderColor: '#667eea',
+                                backgroundColor: 'rgba(41, 128, 185, 0.85)',
+                                borderColor: '#2980b9',
                                 borderWidth: 1
                             }]
                         },
@@ -2746,7 +2880,7 @@
                         .map(row => ({ producto: row.Producto, total: parseFloat((row['TOTAL Coste'] || '0').replace(/\./g, '').replace(',', '.')) }))
                         .sort((a, b) => b.total - a.total)
                         .slice(0, 10);
-                    const colorsProd = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
+                    const colorsProd = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
 
                     const chart6 = new Chart(canvas6, {
                         type: 'line',
@@ -2899,7 +3033,7 @@
                         data: {
                             labels: evolutionData.years,
                             datasets: [
-                                { label: 'Pacientes', data: evolutionData.pacientes, borderColor: '#667eea', backgroundColor: 'rgba(102, 126, 234, 0.1)', tension: 0.4, fill: true, borderWidth: 2 },
+                                { label: 'Pacientes', data: evolutionData.pacientes, borderColor: '#2980b9', backgroundColor: 'rgba(41, 128, 185, 0.1)', tension: 0.4, fill: true, borderWidth: 2 },
                                 { label: 'Visitas', data: evolutionData.visitas, borderColor: '#84fab0', backgroundColor: 'rgba(132, 250, 176, 0.1)', tension: 0.4, fill: true, borderWidth: 2 },
                                 { label: 'Dispensaciones', data: evolutionData.dispensaciones, borderColor: '#fcb69f', backgroundColor: 'rgba(252, 182, 159, 0.1)', tension: 0.4, fill: true, borderWidth: 2 }
                             ]
@@ -2941,8 +3075,8 @@
                             datasets: [{
                                 label: 'Pacientes',
                                 data: topPA.map(item => item.pacientes),
-                                backgroundColor: 'rgba(102, 126, 234, 0.8)',
-                                borderColor: '#667eea',
+                                backgroundColor: 'rgba(41, 128, 185, 0.85)',
+                                borderColor: '#2980b9',
                                 borderWidth: 1
                             }]
                         },
@@ -2982,12 +3116,12 @@
                             datasets: [{
                                 data: serviceData.map(item => item.count),
                                 backgroundColor: [
-                                    'rgba(102, 126, 234, 0.8)',
-                                    'rgba(132, 250, 176, 0.8)',
-                                    'rgba(252, 182, 159, 0.8)',
-                                    'rgba(168, 237, 234, 0.8)',
-                                    'rgba(118, 75, 162, 0.8)',
-                                    'rgba(143, 211, 244, 0.8)'
+                                    'rgba(41, 128, 185, 0.85)',
+                                    'rgba(39, 174, 96, 0.8)',
+                                    'rgba(230, 126, 34, 0.8)',
+                                    'rgba(26, 82, 118, 0.7)',
+                                    'rgba(41, 128, 185, 0.6)',
+                                    'rgba(93, 109, 126, 0.7)'
                                 ],
                                 borderWidth: 1
                             }]
@@ -3284,7 +3418,7 @@
                     const chartHeight = 110;
                     const canvasW = 700;
                     const canvasH = 350;
-                    const colorsPA = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616', '#2ecc71', '#9b59b6'];
+                    const colorsPA = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616', '#2ecc71', '#9b59b6'];
 
                     // Gráfico 1: Evolución pacientes por PA
                     pdf.setFontSize(10);
@@ -3346,8 +3480,8 @@
                             datasets: [{
                                 label: 'Total Pacientes',
                                 data: quarterData.data.map(r => r.Pacientes),
-                                borderColor: '#667eea',
-                                backgroundColor: 'rgba(102, 126, 234, 0.2)',
+                                borderColor: '#2980b9',
+                                backgroundColor: 'rgba(41, 128, 185, 0.2)',
                                 borderWidth: 3,
                                 tension: 0.4,
                                 fill: true
@@ -3436,8 +3570,8 @@
                             datasets: [{
                                 label: 'Coste/Paciente (€)',
                                 data: cpData.data.map(r => parseFloat(r['Coste/Paciente'])),
-                                borderColor: '#667eea',
-                                backgroundColor: 'rgba(102, 126, 234, 0.2)',
+                                borderColor: '#2980b9',
+                                backgroundColor: 'rgba(41, 128, 185, 0.2)',
                                 borderWidth: 3,
                                 tension: 0.4,
                                 fill: true
@@ -3524,7 +3658,7 @@
                     canvas6.height = canvasH;
                     tempDiv.appendChild(canvas6);
 
-                    const colorsBio = ['#84fab0', '#667eea', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
+                    const colorsBio = ['#84fab0', '#2980b9', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
                     const chart6 = new Chart(canvas6, {
                         type: 'line',
                         data: {
@@ -3768,7 +3902,7 @@
                     const chartHeight = 110;
                     const canvasW = 700;
                     const canvasH = 350;
-                    const colorsPA = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616', '#2ecc71', '#9b59b6'];
+                    const colorsPA = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616', '#2ecc71', '#9b59b6'];
 
                     // Gráfico 1: Evolución pacientes por PA
                     pdf.setFontSize(10);
@@ -3830,8 +3964,8 @@
                             datasets: [{
                                 label: 'Total Pacientes',
                                 data: yearData.data.map(r => r.Pacientes),
-                                borderColor: '#667eea',
-                                backgroundColor: 'rgba(102, 126, 234, 0.2)',
+                                borderColor: '#2980b9',
+                                backgroundColor: 'rgba(41, 128, 185, 0.2)',
                                 borderWidth: 3,
                                 tension: 0.4,
                                 fill: true
@@ -3920,8 +4054,8 @@
                             datasets: [{
                                 label: 'Coste/Paciente (€)',
                                 data: cpData.data.map(r => parseFloat(r['Coste/Paciente'])),
-                                borderColor: '#667eea',
-                                backgroundColor: 'rgba(102, 126, 234, 0.2)',
+                                borderColor: '#2980b9',
+                                backgroundColor: 'rgba(41, 128, 185, 0.2)',
                                 borderWidth: 3,
                                 tension: 0.4,
                                 fill: true
@@ -4008,7 +4142,7 @@
                     canvas6.height = canvasH;
                     tempDiv.appendChild(canvas6);
 
-                    const colorsBio = ['#84fab0', '#667eea', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
+                    const colorsBio = ['#84fab0', '#2980b9', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
                     const chart6 = new Chart(canvas6, {
                         type: 'line',
                         data: {
@@ -4243,7 +4377,7 @@
                     const chartHeight = 110;
                     const canvasW = 700;
                     const canvasH = 350;
-                    const colorsPA = ['#667eea', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616', '#2ecc71', '#9b59b6'];
+                    const colorsPA = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616', '#2ecc71', '#9b59b6'];
 
                     // Gráfico 1: Evolución pacientes por PA (últimos 12 meses)
                     pdf.setFontSize(10);
@@ -4305,8 +4439,8 @@
                             datasets: [{
                                 label: 'Total Pacientes',
                                 data: last12Months.map(m => monthData.data.find(r => r.Periodo === m)?.Pacientes || 0),
-                                borderColor: '#667eea',
-                                backgroundColor: 'rgba(102, 126, 234, 0.2)',
+                                borderColor: '#2980b9',
+                                backgroundColor: 'rgba(41, 128, 185, 0.2)',
                                 borderWidth: 3,
                                 tension: 0.4,
                                 fill: true
@@ -4395,8 +4529,8 @@
                             datasets: [{
                                 label: 'Coste/Paciente (€)',
                                 data: last12Months.map(m => parseFloat(cpData.data.find(r => r.Periodo === m)?.['Coste/Paciente'] || 0)),
-                                borderColor: '#667eea',
-                                backgroundColor: 'rgba(102, 126, 234, 0.2)',
+                                borderColor: '#2980b9',
+                                backgroundColor: 'rgba(41, 128, 185, 0.2)',
                                 borderWidth: 3,
                                 tension: 0.4,
                                 fill: true
@@ -4483,7 +4617,7 @@
                     canvas6.height = canvasH;
                     tempDiv.appendChild(canvas6);
 
-                    const colorsBio = ['#84fab0', '#667eea', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
+                    const colorsBio = ['#84fab0', '#2980b9', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
                     const chart6 = new Chart(canvas6, {
                         type: 'line',
                         data: {
@@ -4575,6 +4709,75 @@
                 }
             });
             
+            const calculateRacingBarData = (dataToProcess) => {
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] && row['Servicio Prescriptor']
+                );
+
+                // Agrupar por mes y servicio
+                const monthlyData = {};
+                validData.forEach(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = String(date.getMonth() + 1).padStart(2, '0');
+                    const key = `${year}-${month}`;
+                    const service = row['Servicio Prescriptor'];
+
+                    if (!monthlyData[key]) monthlyData[key] = {};
+                    if (!monthlyData[key][service]) {
+                        monthlyData[key][service] = { pacientes: new Set(), visitas: new Set(), dispensaciones: 0, coste: 0 };
+                    }
+
+                    monthlyData[key][service].pacientes.add(row['Id']);
+                    monthlyData[key][service].visitas.add(`${row['Id']}_${key}`);
+                    monthlyData[key][service].dispensaciones += 1;
+                    monthlyData[key][service].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const months = Object.keys(monthlyData).sort();
+                const allServices = [...new Set(validData.map(r => r['Servicio Prescriptor']))];
+                const monthNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+
+                // Acumuladores por servicio: pacientes y visitas usan Sets globales para no duplicar
+                const cumulative = {};
+                allServices.forEach(s => {
+                    cumulative[s] = { pacientes: new Set(), visitas: new Set(), dispensaciones: 0, coste: 0 };
+                });
+
+                // Construir frames acumulados
+                const frames = months.map(monthKey => {
+                    const [year, month] = monthKey.split('-');
+                    const label = `${monthNames[parseInt(month)-1]} ${year}`;
+
+                    // Sumar el mes actual al acumulado de cada servicio
+                    allServices.forEach(service => {
+                        const d = monthlyData[monthKey]?.[service];
+                        if (d) {
+                            d.pacientes.forEach(id => cumulative[service].pacientes.add(id));
+                            d.visitas.forEach(v => cumulative[service].visitas.add(v));
+                            cumulative[service].dispensaciones += d.dispensaciones;
+                            cumulative[service].coste += d.coste;
+                        }
+                    });
+
+                    const services = allServices.map(service => ({
+                        service,
+                        pacientes: cumulative[service].pacientes.size,
+                        visitas: cumulative[service].visitas.size,
+                        dispensaciones: cumulative[service].dispensaciones,
+                        coste: cumulative[service].coste
+                    }));
+
+                    return { monthKey, label, services };
+                });
+
+                return {
+                    type: 'racing',
+                    title: 'Evolución acumulada por servicio',
+                    data: frames,
+                    services: allServices
+                };
+            };
             const calculatePatientList = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
                     row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
@@ -4623,90 +4826,76 @@
                 };
             };
 
-            const processOption = (option) => {
+            const processOption = (concept) => {
                 if (!data) {
                     alert('Por favor, carga un archivo Excel primero');
                     return;
                 }
 
                 setLoading(true);
-                setSelectedOption(option);
+                setSelectedOption(concept);
 
-                // Simular procesamiento (en la práctica sería inmediato)
                 setTimeout(() => {
                     const dataToProcess = applyFilters() || data;
                     let result;
-                    switch(option) {
-                        case 1:
-                            result = calculateTotals(dataToProcess);
+                    const g = analysisGranularity;
+
+                    switch(concept) {
+                        case 'global':
+                            if (g === 'years')         result = calculateByYears(dataToProcess);
+                            else if (g === 'quarters') result = calculateByQuarters(dataToProcess);
+                            else if (g === 'months')   result = calculateByMonths(dataToProcess);
+                            else                       result = calculateTotals(dataToProcess);
                             break;
-                        case 2:
-                            result = calculateByYears(dataToProcess);
+                        case 'pa':
+                            if (g === 'years')         result = calculatePatientsByActiveIngredientByYear(dataToProcess);
+                            else if (g === 'quarters') result = calculatePatientsByActiveIngredientByQuarter(dataToProcess);
+                            else if (g === 'months')   result = calculatePatientsByActiveIngredientByMonth(dataToProcess);
+                            else                       result = calculatePatientsByActiveIngredientTotal(dataToProcess);
                             break;
-                        case 3:
-                            result = calculateByQuarters(dataToProcess);
+                        case 'biosim':
+                            if (g === 'years')         result = calculateBiosimilarPatientsByYear(dataToProcess);
+                            else if (g === 'quarters') result = calculateBiosimilarPatientsByQuarter(dataToProcess);
+                            else if (g === 'months')   result = calculateBiosimilarPatientsByMonth(dataToProcess);
+                            else                       result = calculateBiosimilarPatientsTotal(dataToProcess);
                             break;
-                        case 4:
-                            result = calculateByMonths(dataToProcess);
+                        case 'consumo':
+                            if (g === 'years')         result = calculateUnitsAndCostByProductByYear(dataToProcess);
+                            else if (g === 'quarters') result = calculateUnitsAndCostByProductByQuarter(dataToProcess);
+                            else if (g === 'months')   result = calculateUnitsAndCostByProductByMonth(dataToProcess);
+                            else                       result = calculateUnitsAndCostByProductTotal(dataToProcess);
                             break;
-                        case 5:
-                            result = calculatePatientsByActiveIngredientByYear(dataToProcess);
+                        case 'coste':
+                            if (g === 'years')         result = calculateCostPerPatientByYear(dataToProcess);
+                            else if (g === 'quarters') result = calculateCostPerPatientByQuarter(dataToProcess);
+                            else if (g === 'months')   result = calculateCostPerPatientByMonth(dataToProcess);
+                            else                       result = calculateCostPerPatientTotal(dataToProcess);
                             break;
-                        case 6:
-                            result = calculatePatientsByActiveIngredientByQuarter(dataToProcess);
-                            break;
-                        case 7:
-                            result = calculatePatientsByActiveIngredientByMonth(dataToProcess);
-                            break;
-                        case 8:
-                            result = calculateBiosimilarPatientsByYear(dataToProcess);
-                            break;
-                        case 9:
-                            result = calculateBiosimilarPatientsByQuarter(dataToProcess);
-                            break;
-                        case 10:
-                            result = calculateBiosimilarPatientsByMonth(dataToProcess);
-                            break;
-                        case 11:
-                            result = calculateUnitsAndCostByProductByYear(dataToProcess);
-                            break;
-                        case 12:
-                            result = calculateUnitsAndCostByProductByQuarter(dataToProcess);
-                            break;
-                        case 13:
-                            result = calculateUnitsAndCostByProductByMonth(dataToProcess);
-                            break;
-                        case 14:
-                            result = calculateCostPerPatientByYear(dataToProcess);
-                            break;
-                        case 15:
-                            result = calculateCostPerPatientByQuarter(dataToProcess);
-                            break;
-                        case 16:
-                            result = calculateCostPerPatientByMonth(dataToProcess);
-                            break;
-                        case 17:
+                        case 'combinados':
                             result = calculateCombinedTreatments(dataToProcess);
                             break;
-                        case 18:
+                        case 'nuevos':
                             result = calculateNewVsRecurringPatients(dataToProcess);
                             break;
-                        case 19:
+                        case 'interanual':
                             result = calculateYearComparison(dataToProcess);
                             break;
-                        case 20:
+                        case 'heatmap':
                             result = calculateActivityHeatmap(dataToProcess);
                             break;
-                        case 21:
+                        case 'pacientes':
                             result = calculatePatientList(dataToProcess);
+                            break;
+                        case 'racing':
+                            result = calculateRacingBarData(dataToProcess);
                             break;
                         default:
                             result = { type: 'custom', data: [], title: 'Análisis Personalizado' };
                     }
+
                     setResults(result);
                     setLoading(false);
-                    
-                    // Crear gráfico tras setear resultados
+
                     setTimeout(() => {
                         const canvas = document.getElementById('analysisChart');
                         if (canvas && result && result.data && result.data.length > 0) {
@@ -5279,8 +5468,83 @@
                     title: 'Mapa de Calor - Pacientes por Mes/Año',
                     data: results,
                     maxValue: maxPatients,
-                    years: years
+                    years: years,
+                    columnOrder: ['Mes', ...years.map(String)]
                 };
+            };
+
+            const calculatePatientsByActiveIngredientTotal = (dataToProcess) => {
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] && row['Descripción Principio Activo']
+                );
+                const paData = {};
+                validData.forEach(row => {
+                    const pa = row['Descripción Principio Activo'];
+                    if (!paData[pa]) paData[pa] = new Set();
+                    paData[pa].add(row['Id']);
+                });
+                const results = Object.keys(paData)
+                    .map(pa => ({ 'Principio Activo': pa, 'Pacientes': paData[pa].size }))
+                    .sort((a, b) => b['Pacientes'] - a['Pacientes']);
+                return { type: 'table', title: 'Pacientes por Principio Activo (Total)', data: results };
+            };
+
+            const calculateBiosimilarPatientsTotal = (dataToProcess) => {
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] && row['Descripción Producto Dispensado']
+                );
+                const biosimilarData = validData.filter(row => {
+                    const producto = row['Descripción Producto Dispensado'].toUpperCase();
+                    return BIOSIMILARES.some(bio => producto.includes(bio));
+                });
+                const bioData = {};
+                biosimilarData.forEach(row => {
+                    const producto = row['Descripción Producto Dispensado'];
+                    if (!bioData[producto]) bioData[producto] = new Set();
+                    bioData[producto].add(row['Id']);
+                });
+                const results = Object.keys(bioData)
+                    .map(p => ({ 'Biosimilar': p, 'Pacientes': bioData[p].size }))
+                    .sort((a, b) => b['Pacientes'] - a['Pacientes']);
+                return { type: 'table', title: 'Pacientes con Biosimilares (Total)', data: results };
+            };
+
+            const calculateUnitsAndCostByProductTotal = (dataToProcess) => {
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Descripción Producto Dispensado']
+                );
+                const productData = {};
+                validData.forEach(row => {
+                    let producto = row['Descripción Producto Dispensado'];
+                    for (const agrupacion of AGRUPACIONES_PRODUCTOS) {
+                        if (producto.includes(agrupacion)) { producto = agrupacion; break; }
+                    }
+                    if (!productData[producto]) productData[producto] = { unidades: 0, coste: 0 };
+                    productData[producto].unidades += parseInt(row['Cantidad']) || 0;
+                    productData[producto].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+                const results = Object.keys(productData)
+                    .map(p => ({
+                        'Producto': p,
+                        'Unidades': productData[p].unidades,
+                        'Coste Total (€)': productData[p].coste.toFixed(2)
+                    }))
+                    .sort((a, b) => b['Coste Total (€)'] - a['Coste Total (€)']);
+                return { type: 'table', title: 'Consumo por Medicamento (Total)', data: results };
+            };
+
+            const calculateCostPerPatientTotal = (dataToProcess) => {
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                );
+                const ids = new Set(validData.map(r => r['Id']));
+                const totalCoste = validData.reduce((s, r) => s + (parseFloat(r['Coste Dispensación']) || 0), 0);
+                const results = [{
+                    'Pacientes': ids.size,
+                    'Coste Total (€)': totalCoste.toFixed(2),
+                    'Coste/Paciente (€)': ids.size > 0 ? (totalCoste / ids.size).toFixed(2) : '0.00'
+                }];
+                return { type: 'table', title: 'Coste por Paciente (Total)', data: results };
             };
 
             const calculatePatientsByActiveIngredientByYear = (dataToProcess) => {
@@ -5332,7 +5596,8 @@
                     type: 'pivot',
                     title: 'Pacientes por Principio Activo por Años',
                     data: results,
-                    years: years
+                    years: years,
+                    columnOrder: ['Principio Activo', ...years.map(String), 'TOTAL']
                 };
             };
 
@@ -5506,7 +5771,8 @@
                     type: 'pivot',
                     title: 'Pacientes con Biosimilares por Años',
                     data: results,
-                    years: years
+                    years: years,
+                    columnOrder: ['Biosimilar', ...years.map(String), 'TOTAL']
                 };
             };
 
@@ -5880,8 +6146,10 @@
             return (
                 <div className="container">
                     <div className="header">
-                        <h1>🏥 Analizador de dispensaciones en IMID</h1>
-                        <p>Sistema de indicadores cuantitativos para farmacia hospitalaria</p>
+                        <div className="header-text">
+                            <h1>🏥 Dashboard analizador de dispensaciones IMID</h1>
+                            <p>Sistema de indicadores cuantitativos · Farmacia Hospitalaria · H. U. i P. La Fe</p>
+                        </div>
                         {(() => {
                             const activeCount = [filters.year, filters.service, filters.pathology, filters.activeIngredient, filters.dateFrom, filters.dateTo].filter(Boolean).length;
                             return activeCount > 0 ? (
@@ -5889,22 +6157,22 @@
                                     display: 'inline-flex',
                                     alignItems: 'center',
                                     gap: '8px',
-                                    marginTop: '10px',
-                                    padding: '6px 14px',
-                                    background: 'rgba(255,255,255,0.2)',
+                                    padding: '4px 12px',
+                                    background: 'rgba(255,255,255,0.15)',
                                     borderRadius: '20px',
-                                    fontSize: '13px'
+                                    fontSize: '0.8rem'
                                 }}>
                                     <span style={{
-                                        background: '#feca57',
-                                        color: '#333',
+                                        background: '#e67e22',
+                                        color: 'white',
                                         borderRadius: '50%',
-                                        width: '22px',
-                                        height: '22px',
+                                        width: '20px',
+                                        height: '20px',
                                         display: 'flex',
                                         alignItems: 'center',
                                         justifyContent: 'center',
-                                        fontWeight: 'bold'
+                                        fontWeight: 'bold',
+                                        fontSize: '0.75rem'
                                     }}>{activeCount}</span>
                                     <span>filtro{activeCount > 1 ? 's' : ''} activo{activeCount > 1 ? 's' : ''}</span>
                                     <button
@@ -5913,20 +6181,21 @@
                                             setResults(null);
                                         }}
                                         style={{
-                                            background: 'rgba(255,255,255,0.3)',
+                                            background: 'rgba(255,255,255,0.25)',
                                             border: 'none',
-                                            borderRadius: '12px',
-                                            padding: '4px 10px',
+                                            borderRadius: '10px',
+                                            padding: '3px 8px',
                                             cursor: 'pointer',
-                                            fontSize: '12px',
+                                            fontSize: '0.75rem',
                                             color: 'white'
                                         }}
                                     >
-                                        Limpiar todo
+                                        Limpiar
                                     </button>
                                 </div>
                             ) : null;
                         })()}
+                        <button className="btn-info-header" onClick={() => setShowInfoModal(true)}>ℹ Acerca de</button>
                     </div>
 
                     <div className="main-content">
@@ -6051,7 +6320,7 @@
                                     <div style={{marginTop: '15px', padding: '10px', background: '#fff3cd', borderRadius: '8px', color: '#856404'}}>
                                         ⚠️ Filtros activos: Se procesarán {applyFilters()?.length || 0} de {data.length} registros
                                         <button 
-                                            style={{marginLeft: '15px', padding: '5px 15px', background: '#667eea', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
+                                            style={{marginLeft: '15px', padding: '5px 15px', background: '#2980b9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
                                             onClick={() => setFilters({ year: '', service: '', pathology: '', activeIngredient: '', dateFrom: '', dateTo: '' })}
                                         >
                                             Limpiar filtros
@@ -6109,7 +6378,7 @@
                                         style={{
                                             marginLeft: '20px',
                                             padding: '12px 24px',
-                                            background: '#667eea',
+                                            background: '#2980b9',
                                             color: 'white',
                                             border: 'none',
                                             borderRadius: '8px',
@@ -6196,93 +6465,166 @@
                         {/* === VISTA ANÁLISIS === */}
                         {viewMode === 'analysis' && (
                             <>
-                        <h2 style={{marginBottom: '20px', color: '#667eea'}}>📊 Menú principal</h2>
-                        
-                        <div className="menu-grid">
-                            <button className="menu-button" onClick={() => processOption(1)} disabled={!data}>
-                                <span className="number">1</span>
-                                Totales globales
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(2)} disabled={!data}>
-                                <span className="number">2</span>
-                                Indicadores por años
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(3)} disabled={!data}>
-                                <span className="number">3</span>
-                                Indicadores por trimestres
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(4)} disabled={!data}>
-                                <span className="number">4</span>
-                                Indicadores por meses
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(5)} disabled={!data}>
-                                <span className="number">5</span>
-                                Pacientes por principio activo (años)
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(6)} disabled={!data}>
-                                <span className="number">6</span>
-                                Pacientes por principio activo (trimestres)
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(7)} disabled={!data}>
-                                <span className="number">7</span>
-                                Pacientes por principio activo (meses)
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(8)} disabled={!data}>
-                                <span className="number">8</span>
-                                Biosimilares por años
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(9)} disabled={!data}>
-                                <span className="number">9</span>
-                                Biosimilares por trimestres
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(10)} disabled={!data}>
-                                <span className="number">10</span>
-                                Biosimilares por meses
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(11)} disabled={!data}>
-                                <span className="number">11</span>
-                                Unidades y coste por medicamento (años)
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(12)} disabled={!data}>
-                                <span className="number">12</span>
-                                Unidades y coste por medicamento (trimestres)
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(13)} disabled={!data}>
-                                <span className="number">13</span>
-                                Unidades y coste por medicamento (meses)
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(14)} disabled={!data}>
-                                <span className="number">14</span>
-                                Coste/Paciente por años
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(15)} disabled={!data}>
-                                <span className="number">15</span>
-                                Coste/Paciente por trimestres
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(16)} disabled={!data}>
-                                <span className="number">16</span>
-                                Coste/Paciente por meses
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(17)} disabled={!data}>
-                                <span className="number">17</span>
-                                Tratamientos combinados
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(18)} disabled={!data}>
-                                <span className="number">18</span>
-                                Nuevos vs recurrentes (años)
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(19)} disabled={!data}>
-                                <span className="number">19</span>
-                                Comparativa interanual
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(20)} disabled={!data}>
-                                <span className="number">20</span>
-                                Mapa de calor (actividad)
-                            </button>
-                            <button className="menu-button" onClick={() => processOption(21)} disabled={!data}>
-                                <span className="number">21</span>
-                                Listado de pacientes (según filtros)
-                            </button>
+                        <div style={{marginBottom: '1.5rem'}}>
+                            <h2 style={{marginBottom: '1rem', color: 'var(--azul)', fontSize: '1.1rem', fontWeight: '700'}}>📊 Análisis detallado</h2>
+
+                            {/* Selector de granularidad temporal */}
+                            <div style={{
+                                background: 'var(--blanco)',
+                                border: '1px solid var(--gris-borde)',
+                                borderRadius: 'var(--radius)',
+                                padding: '1rem 1.25rem',
+                                marginBottom: '1rem',
+                                boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '1rem',
+                                flexWrap: 'wrap'
+                            }}>
+                                <label style={{
+                                    fontWeight: '600',
+                                    fontSize: '0.78rem',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.03em',
+                                    color: 'var(--texto-sec)',
+                                    whiteSpace: 'nowrap'
+                                }}>
+                                    📅 Mostrar datos por:
+                                </label>
+                                <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
+                                    {[
+                                        { value: 'total',    label: '🔢 Total' },
+                                        { value: 'years',    label: '📆 Por años' },
+                                        { value: 'quarters', label: '📊 Por trimestres' },
+                                        { value: 'months',   label: '🗓 Por meses' }
+                                    ].map(opt => (
+                                        <button
+                                            key={opt.value}
+                                            onClick={() => { setAnalysisGranularity(opt.value); setResults(null); }}
+                                            style={{
+                                                padding: '0.45rem 1rem',
+                                                borderRadius: 'var(--radius)',
+                                                border: '2px solid',
+                                                borderColor: analysisGranularity === opt.value ? 'var(--azul-claro)' : 'var(--gris-borde)',
+                                                background: analysisGranularity === opt.value ? 'var(--azul-claro)' : 'var(--blanco)',
+                                                color: analysisGranularity === opt.value ? 'white' : 'var(--texto-sec)',
+                                                fontWeight: '600',
+                                                fontSize: '0.85rem',
+                                                cursor: 'pointer',
+                                                transition: 'all 0.15s'
+                                            }}
+                                        >{opt.label}</button>
+                                    ))}
+                                </div>
+                                <span style={{fontSize: '0.78rem', color: 'var(--texto-sec)', marginLeft: 'auto'}}>
+                                    {analysisGranularity === 'total' && 'Resultados acumulados de todo el período'}
+                                    {analysisGranularity === 'years' && 'Resultados desglosados por año natural'}
+                                    {analysisGranularity === 'quarters' && 'Resultados desglosados por trimestre'}
+                                    {analysisGranularity === 'months' && 'Resultados desglosados por mes'}
+                                </span>
+                            </div>
+
+                            {/* Grid de indicadores */}
+                            <div style={{
+                                display: 'grid',
+                                gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                                gap: '0.75rem'
+                            }}>
+                                {/* Grupo 1: Con granularidad temporal */}
+                                <button className="menu-button" onClick={() => processOption('global')} disabled={!data}>
+                                    <span className="number">📈</span>
+                                    Indicadores globales
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Pacientes · Visitas · Dispensaciones · Coste
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('pa')} disabled={!data}>
+                                    <span className="number">💊</span>
+                                    Pacientes por principio activo
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Nº pacientes únicos por fármaco
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('biosim')} disabled={!data}>
+                                    <span className="number">🔬</span>
+                                    Pacientes con biosimilares
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Penetración de biosimilares
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('consumo')} disabled={!data}>
+                                    <span className="number">📦</span>
+                                    Consumo por medicamento
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Unidades y coste por producto
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('coste')} disabled={!data}>
+                                    <span className="number">💶</span>
+                                    Coste por paciente
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Coste total y coste medio/paciente
+                                    </span>
+                                </button>
+
+                                {/* Separador visual */}
+                                <div style={{
+                                    gridColumn: '1 / -1',
+                                    borderTop: '1px dashed var(--gris-borde)',
+                                    paddingTop: '0.5rem',
+                                    fontSize: '0.72rem',
+                                    textTransform: 'uppercase',
+                                    letterSpacing: '0.06em',
+                                    color: 'var(--texto-sec)',
+                                    fontWeight: '600'
+                                }}>
+                                    Análisis especiales (resultado siempre global)
+                                </div>
+
+                                {/* Grupo 2: Sin granularidad temporal */}
+                                <button className="menu-button" onClick={() => processOption('combinados')} disabled={!data}>
+                                    <span className="number">🔗</span>
+                                    Tratamientos combinados
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Pacientes con múltiples principios activos
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('nuevos')} disabled={!data}>
+                                    <span className="number">🆕</span>
+                                    Pacientes nuevos vs recurrentes
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Evolución de nuevos pacientes por año
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('interanual')} disabled={!data}>
+                                    <span className="number">📉</span>
+                                    Comparativa interanual
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Variación % respecto al año anterior
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('heatmap')} disabled={!data}>
+                                    <span className="number">🗺</span>
+                                    Mapa de calor
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Actividad mensual por año
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('pacientes')} disabled={!data}>
+                                    <span className="number">👥</span>
+                                    Listado de pacientes
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Detalle individual según filtros activos
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('racing')} disabled={!data}>
+                                    <span className="number">🏁</span>
+                                    Evolución por servicio
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Racing bar chart mensual por servicio
+                                    </span>
+                                </button>
+                            </div>
                         </div>
 
                         {loading && (
@@ -6297,15 +6639,212 @@
                                 <div className="results-header">
                                     <h2>{results.title}</h2>
                                     <div className="export-buttons">
-                                        <button className="export-btn" onClick={exportToExcel}>
-                                            📊 Exportar Excel
-                                        </button>
-                                        <button className="export-btn" onClick={exportToCSV}>
-                                            📄 Exportar CSV
-                                        </button>
+                                        {results.type !== 'racing' && (
+                                            <>
+                                                <button className="export-btn" onClick={exportToExcel}>
+                                                    📊 Exportar Excel
+                                                </button>
+                                                <button className="export-btn" onClick={exportToCSV}>
+                                                    📄 Exportar CSV
+                                                </button>
+                                            </>
+                                        )}
                                     </div>
                                 </div>
-                                
+
+                                {/* ══ RACING BAR CHART ══ */}
+                                {results.type === 'racing' && (() => {
+                                    const RacingChart = () => {
+                                        const [frameIdx, setFrameIdx] = React.useState(0);
+                                        const [playing, setPlaying] = React.useState(false);
+                                        const [speed, setSpeed] = React.useState(800);
+                                        const [metric, setMetric] = React.useState('pacientes');
+                                        const intervalRef = React.useRef(null);
+                                        const frames = results.data;
+                                        const totalFrames = frames.length;
+
+                                        const metricLabels = {
+                                            pacientes: 'Pacientes únicos',
+                                            visitas: 'Visitas',
+                                            dispensaciones: 'Dispensaciones',
+                                            coste: 'Coste (€)'
+                                        };
+
+                                        // Palette: up to 20 distinct colors
+                                        const PALETTE = [
+                                            '#2980b9','#27ae60','#e67e22','#8e44ad','#c0392b',
+                                            '#16a085','#f39c12','#2c3e50','#1abc9c','#d35400',
+                                            '#7f8c8d','#e91e63','#3f51b5','#009688','#ff5722',
+                                            '#795548','#607d8b','#9c27b0','#00bcd4','#8bc34a'
+                                        ];
+                                        const serviceColors = {};
+                                        results.services.forEach((s, i) => {
+                                            serviceColors[s] = PALETTE[i % PALETTE.length];
+                                        });
+
+                                        React.useEffect(() => {
+                                            if (playing) {
+                                                intervalRef.current = setInterval(() => {
+                                                    setFrameIdx(prev => {
+                                                        if (prev >= totalFrames - 1) {
+                                                            clearInterval(intervalRef.current);
+                                                            setPlaying(false);
+                                                            return prev;
+                                                        }
+                                                        return prev + 1;
+                                                    });
+                                                }, speed);
+                                            } else {
+                                                clearInterval(intervalRef.current);
+                                            }
+                                            return () => clearInterval(intervalRef.current);
+                                        }, [playing, speed]);
+
+                                        const frame = frames[frameIdx];
+                                        const sorted = [...frame.services]
+                                            .sort((a, b) => b[metric] - a[metric]);
+                                        const maxVal = sorted[0]?.[metric] || 1;
+                                        const top = sorted.slice(0, 15); // max 15 bars
+
+                                        const formatVal = (v) => {
+                                            if (metric === 'coste') return v.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' €';
+                                            return v.toLocaleString('es-ES');
+                                        };
+
+                                        return (
+                                            <div style={{ padding: '0 0 1rem 0' }}>
+                                                {/* Controls */}
+                                                <div style={{
+                                                    display: 'flex', flexWrap: 'wrap', gap: '0.75rem',
+                                                    alignItems: 'center', padding: '1rem 1.25rem',
+                                                    background: 'var(--gris-fondo)',
+                                                    borderBottom: '1px solid var(--gris-borde)'
+                                                }}>
+                                                    {/* Metric selector */}
+                                                    <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                                                        {Object.entries(metricLabels).map(([k, label]) => (
+                                                            <button key={k} onClick={() => { setMetric(k); setFrameIdx(0); setPlaying(false); }}
+                                                                style={{
+                                                                    padding: '0.35rem 0.8rem', fontSize: '0.8rem', fontWeight: '600',
+                                                                    borderRadius: 'var(--radius)', border: '2px solid',
+                                                                    borderColor: metric === k ? 'var(--azul-claro)' : 'var(--gris-borde)',
+                                                                    background: metric === k ? 'var(--azul-claro)' : 'var(--blanco)',
+                                                                    color: metric === k ? 'white' : 'var(--texto-sec)',
+                                                                    cursor: 'pointer'
+                                                                }}>{label}</button>
+                                                        ))}
+                                                    </div>
+
+                                                    <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                                        {/* Speed */}
+                                                        <label style={{ fontSize: '0.75rem', color: 'var(--texto-sec)', fontWeight: '600' }}>Velocidad:</label>
+                                                        <select value={speed} onChange={e => setSpeed(Number(e.target.value))}
+                                                            style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)', width: 'auto' }}>
+                                                            <option value={1200}>Lenta</option>
+                                                            <option value={800}>Normal</option>
+                                                            <option value={400}>Rápida</option>
+                                                            <option value={150}>Muy rápida</option>
+                                                        </select>
+                                                        {/* Play/Pause/Reset */}
+                                                        <button onClick={() => { setFrameIdx(0); setPlaying(false); }}
+                                                            style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', fontWeight: '700', borderRadius: 'var(--radius)', border: '2px solid var(--gris-borde)', background: 'var(--blanco)', cursor: 'pointer' }}>⏮</button>
+                                                        <button onClick={() => setPlaying(p => !p)}
+                                                            style={{
+                                                                padding: '0.4rem 1.2rem', fontSize: '0.95rem', fontWeight: '700',
+                                                                borderRadius: 'var(--radius)', border: 'none',
+                                                                background: playing ? 'var(--naranja)' : 'var(--verde)',
+                                                                color: 'white', cursor: 'pointer', minWidth: '80px'
+                                                            }}>
+                                                            {playing ? '⏸ Pausa' : '▶ Play'}
+                                                        </button>
+                                                        <button onClick={() => setFrameIdx(p => Math.min(p + 1, totalFrames - 1))} disabled={frameIdx >= totalFrames - 1 || playing}
+                                                            style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', fontWeight: '700', borderRadius: 'var(--radius)', border: '2px solid var(--gris-borde)', background: 'var(--blanco)', cursor: 'pointer', opacity: (frameIdx >= totalFrames - 1 || playing) ? 0.4 : 1 }}>⏭</button>
+                                                    </div>
+                                                </div>
+
+                                                {/* Timestamp badge + progress bar */}
+                                                <div style={{ padding: '0.75rem 1.25rem 0.25rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                                    <div style={{
+                                                        background: 'var(--azul)', color: 'white',
+                                                        borderRadius: 'var(--radius)', padding: '0.3rem 0.9rem',
+                                                        fontWeight: '700', fontSize: '1rem', minWidth: '90px', textAlign: 'center'
+                                                    }}>{frame.label}</div>
+                                                    <div style={{ flex: 1, height: '6px', background: 'var(--gris-borde)', borderRadius: '3px', overflow: 'hidden' }}>
+                                                        <div style={{
+                                                            width: `${((frameIdx + 1) / totalFrames) * 100}%`,
+                                                            height: '100%', background: 'var(--azul-claro)',
+                                                            transition: 'width 0.3s ease', borderRadius: '3px'
+                                                        }} />
+                                                    </div>
+                                                    <span style={{ fontSize: '0.78rem', color: 'var(--texto-sec)', whiteSpace: 'nowrap' }}>
+                                                        {frameIdx + 1} / {totalFrames}
+                                                    </span>
+                                                </div>
+
+                                                {/* Slider */}
+                                                <div style={{ padding: '0.25rem 1.25rem 0.5rem' }}>
+                                                    <input type="range" min={0} max={totalFrames - 1} value={frameIdx}
+                                                        onChange={e => { setFrameIdx(Number(e.target.value)); setPlaying(false); }}
+                                                        style={{ width: '100%', accentColor: 'var(--azul-claro)' }} />
+                                                </div>
+
+                                                {/* Bar chart */}
+                                                <div style={{ padding: '0.5rem 1.25rem 1rem' }}>
+                                                    {top.map((item, i) => {
+                                                        const pct = maxVal > 0 ? (item[metric] / maxVal) * 100 : 0;
+                                                        const color = serviceColors[item.service];
+                                                        return (
+                                                            <div key={item.service} style={{
+                                                                display: 'flex', alignItems: 'center',
+                                                                marginBottom: '0.55rem', gap: '0.75rem'
+                                                            }}>
+                                                                {/* Rank */}
+                                                                <div style={{ width: '24px', textAlign: 'right', fontWeight: '700', fontSize: '0.8rem', color: 'var(--texto-sec)', flexShrink: 0 }}>
+                                                                    {i + 1}
+                                                                </div>
+                                                                {/* Service name */}
+                                                                <div style={{
+                                                                    width: '180px', flexShrink: 0, fontSize: '0.78rem',
+                                                                    fontWeight: '600', color: 'var(--texto)',
+                                                                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                                                    textAlign: 'right'
+                                                                }} title={item.service}>{item.service}</div>
+                                                                {/* Bar */}
+                                                                <div style={{ flex: 1, height: '28px', background: 'var(--gris-fondo)', borderRadius: '4px', overflow: 'hidden', position: 'relative' }}>
+                                                                    <div style={{
+                                                                        width: `${pct}%`, height: '100%',
+                                                                        background: color,
+                                                                        borderRadius: '0 4px 4px 0',
+                                                                        transition: 'width 0.5s cubic-bezier(0.4,0,0.2,1)',
+                                                                        display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+                                                                        paddingRight: '6px'
+                                                                    }}>
+                                                                        {pct > 12 && (
+                                                                            <span style={{ color: 'white', fontSize: '0.75rem', fontWeight: '700', whiteSpace: 'nowrap' }}>
+                                                                                {formatVal(item[metric])}
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                                {/* Value outside bar if too small */}
+                                                                {pct <= 12 && (
+                                                                    <div style={{ width: '80px', fontSize: '0.75rem', fontWeight: '700', color: 'var(--texto)', flexShrink: 0 }}>
+                                                                        {formatVal(item[metric])}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        );
+                                    };
+                                    return <RacingChart />;
+                                })()}
+
+                                {/* ══ STANDARD chart + table ══ */}
+                                {results.type !== 'racing' && (
+                                    <>
                                 {/* Gráfico del análisis */}
                                 <div className="analysis-chart-container">
                                     <canvas id="analysisChart"></canvas>
@@ -6315,7 +6854,7 @@
                                     <table>
                                         <thead>
                                             <tr>
-                                                {Object.keys(results.data[0] || {}).map(key => (
+                                                {(results.columnOrder || Object.keys(results.data[0] || {})).map(key => (
                                                     <th
                                                         key={key}
                                                         onClick={() => {
@@ -6361,7 +6900,8 @@
 
                                                 return sortedData.map((row, idx) => (
                                                     <tr key={idx}>
-                                                        {Object.entries(row).map(([key, value], i) => {
+                                                        {(results.columnOrder || Object.keys(row)).map((key, i) => {
+                                                            const value = row[key];
                                                             const isFirstColumn = i === 0;
                                                             const isPatientIdColumn = key === 'Id de los pacientes';
                                                             const isTrendColumn = key === 'Tendencia';
@@ -6427,6 +6967,8 @@
                                         </tbody>
                                     </table>
                                 </div>
+                                    </>
+                                )}
                             </div>
                         )}
                             </>
@@ -6439,7 +6981,7 @@
                                     ℹ️ <strong>Histórico por paciente:</strong> Introduce el identificador de un paciente para consultar su historial de dispensaciones. Los filtros activos se aplican a la búsqueda.
                                 </div>
 
-                                <h2 style={{marginBottom: '20px', color: '#667eea'}}>🔍 Histórico por paciente</h2>
+                                <h2 style={{marginBottom: '20px', color: '#2980b9'}}>🔍 Histórico por paciente</h2>
 
                                 <div style={{
                                     background: '#f5f7fa',
@@ -6453,7 +6995,7 @@
                                         display: 'block',
                                         marginBottom: '10px',
                                         fontWeight: '600',
-                                        color: '#2b2f49',
+                                        color: '#1a5276',
                                         fontSize: '1.1em'
                                     }}>
                                         Identificador del paciente
@@ -6468,7 +7010,7 @@
                                                 flex: 1,
                                                 padding: '12px 16px',
                                                 fontSize: '1.1em',
-                                                border: '2px solid #667eea',
+                                                border: '2px solid #2980b9',
                                                 borderRadius: '10px',
                                                 outline: 'none',
                                                 transition: 'border-color 0.3s ease'
@@ -6485,7 +7027,7 @@
                                             disabled={!data || !patientId.trim()}
                                             style={{
                                                 padding: '12px 24px',
-                                                background: (!data || !patientId.trim()) ? '#ccc' : '#667eea',
+                                                background: (!data || !patientId.trim()) ? '#ccc' : '#2980b9',
                                                 color: 'white',
                                                 border: 'none',
                                                 borderRadius: '10px',
@@ -6514,8 +7056,8 @@
 
                                 {patientResults && patientResults.found && (
                                     <div style={{marginTop: '10px'}}>
-                                        <h3 style={{color: '#2b2f49', marginBottom: '15px'}}>
-                                            Historial del paciente <span style={{color: '#667eea'}}>{patientResults.id}</span>
+                                        <h3 style={{color: '#1a5276', marginBottom: '15px'}}>
+                                            Historial del paciente <span style={{color: '#2980b9'}}>{patientResults.id}</span>
                                             <span style={{fontSize: '0.8em', color: '#666', marginLeft: '15px'}}>
                                                 ({patientResults.dispensaciones.length} dispensaciones)
                                             </span>
@@ -6546,7 +7088,7 @@
                                                         overflow: 'hidden'
                                                     }}>
                                                         <thead>
-                                                            <tr style={{background: '#2b2f49', color: 'white'}}>
+                                                            <tr style={{background: '#1a5276', color: 'white'}}>
                                                                 <th style={{padding: '12px 15px', textAlign: 'left'}}>Fecha</th>
                                                                 <th style={{padding: '12px 15px', textAlign: 'left'}}>Medicamento</th>
                                                                 <th style={{padding: '12px 15px', textAlign: 'right'}}>Cantidad</th>
@@ -6597,11 +7139,11 @@
                                                 }}>
                                                     <div style={{textAlign: 'center'}}>
                                                         <div style={{fontSize: '0.85em', color: '#666', marginBottom: '5px'}}>Total unidades</div>
-                                                        <div style={{fontSize: '1.4em', fontWeight: '700', color: '#2b2f49'}}>{tto.totalUnidades.toLocaleString('es-ES')}</div>
+                                                        <div style={{fontSize: '1.4em', fontWeight: '700', color: '#1a5276'}}>{tto.totalUnidades.toLocaleString('es-ES')}</div>
                                                     </div>
                                                     <div style={{textAlign: 'center'}}>
                                                         <div style={{fontSize: '0.85em', color: '#666', marginBottom: '5px'}}>Coste total</div>
-                                                        <div style={{fontSize: '1.4em', fontWeight: '700', color: '#2b2f49'}}>{tto.totalCoste.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €</div>
+                                                        <div style={{fontSize: '1.4em', fontWeight: '700', color: '#1a5276'}}>{tto.totalCoste.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €</div>
                                                     </div>
                                                     <div style={{textAlign: 'center'}}>
                                                         <div style={{fontSize: '0.85em', color: '#666', marginBottom: '5px'}}>Adherencia (MPR)</div>
@@ -6631,7 +7173,7 @@
                                             <div style={{
                                                 marginTop: '20px',
                                                 padding: '20px',
-                                                background: '#667eea',
+                                                background: '#2980b9',
                                                 borderRadius: '10px',
                                                 color: 'white'
                                             }}>
@@ -6727,7 +7269,7 @@
                                     ℹ️ <strong>Informes predefinidos:</strong> Genera informes completos en formato PDF para presentar y compartir.
                                 </div>
 
-                                <h2 style={{marginBottom: '20px', color: '#667eea'}}>📄 Informes predefinidos</h2>
+                                <h2 style={{marginBottom: '20px', color: '#2980b9'}}>📄 Informes predefinidos</h2>
                                 
                                 <div className="menu-grid">
                                     <button className="menu-button" onClick={() => generateReport(1)} disabled={!data}>
@@ -6774,6 +7316,30 @@
                             </>
                         )}
                     </div>
+
+                    {/* Modal de información */}
+                    {showInfoModal && (
+                        <div className="modal-overlay" onClick={() => setShowInfoModal(false)}>
+                            <div className="modal-box" onClick={e => e.stopPropagation()}>
+                                <h2>ℹ Acerca de esta aplicación</h2>
+                                <p>
+                                    <strong>Dashboard analizador de dispensaciones IMID</strong> es una herramienta de análisis cuantitativo de dispensaciones farmacéuticas en patologías inmunomediadas (IMID).
+                                </p>
+                                <p>
+                                    Permite calcular indicadores de pacientes, visitas, dispensaciones y coste, con capacidad de filtrado y agrupación temporal por meses, trimestres y años.
+                                </p>
+                                <p style={{background: '#fdebd0', borderLeft: '4px solid #e67e22', padding: '0.6rem 0.8rem', borderRadius: '6px', fontSize: '0.82rem'}}>
+                                    ⚠️ Esta herramienta es un <strong>apoyo a la gestión</strong> y no debe utilizarse como único criterio para la toma de decisiones clínicas. Los datos se procesan localmente en el navegador y no se envían a ningún servidor externo.
+                                </p>
+                                <div className="modal-footer">
+                                    <span>Aplicación creada por </span>
+                                    <a href="https://www.linkedin.com/in/emilio-monte-boquet" target="_blank" rel="noopener">EMB</a>
+                                    <span> · Hospital Universitari i Politècnic La Fe · Valencia</span>
+                                </div>
+                                <button className="btn-close-modal" onClick={() => setShowInfoModal(false)}>Cerrar</button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             );
         }
