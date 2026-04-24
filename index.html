@@ -7045,8 +7045,48 @@
                                         ? results.pivotMeta.columnOrder
                                         : ['Biosimilar', 'Pacientes'];
 
+                                    const exportBiosimExcel = () => {
+                                        const wb = XLSX.utils.book_new();
+                                        // Hoja 1: por PA
+                                        const ws1 = XLSX.utils.json_to_sheet(
+                                            results.byPA.map(row => {
+                                                const ordered = {};
+                                                paColOrder.forEach(col => { ordered[col] = row[col] ?? '–'; });
+                                                return ordered;
+                                            })
+                                        );
+                                        XLSX.utils.book_append_sheet(wb, ws1, 'Por Principio Activo');
+                                        // Hoja 2: por medicamento
+                                        const ws2 = XLSX.utils.json_to_sheet(
+                                            results.byProduct.map(row => {
+                                                const ordered = {};
+                                                productColOrder.forEach(col => { ordered[col] = row[col] ?? '–'; });
+                                                return ordered;
+                                            })
+                                        );
+                                        XLSX.utils.book_append_sheet(wb, ws2, 'Por Medicamento');
+                                        XLSX.writeFile(wb, `${results.title.replace(/\s+/g, '_')}.xlsx`);
+                                    };
+
                                     return (
                                         <div style={{ padding: '1.25rem' }}>
+                                            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '1rem' }}>
+                                                <button
+                                                    onClick={exportBiosimExcel}
+                                                    style={{
+                                                        display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                                        padding: '0.5rem 1rem', fontSize: '0.85rem', fontWeight: '600',
+                                                        background: 'var(--verde)', color: 'white', border: 'none',
+                                                        borderRadius: 'var(--radius)', cursor: 'pointer',
+                                                        boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
+                                                        transition: 'background 0.2s'
+                                                    }}
+                                                    onMouseOver={e => e.currentTarget.style.background = '#1e8449'}
+                                                    onMouseOut={e => e.currentTarget.style.background = 'var(--verde)'}
+                                                >
+                                                    📥 Descargar Excel (2 hojas)
+                                                </button>
+                                            </div>
                                             {renderTable(results.byPA, paColOrder, '📊 Penetración de biosimilares por Principio Activo', '% Pac Global')}
                                             {renderTable(results.byProduct, productColOrder, '💊 Pacientes y coste por Medicamento Biosimilar', 'Total Pac')}
                                         </div>
