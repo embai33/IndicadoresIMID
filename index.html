@@ -686,6 +686,23 @@
             'AVTOZMA', 'UZPRUVO', 'STEQEYMA', 'PYZCHYVA', 'OMLYCLO'
         ];
 
+        // Mapeo biosimilar → principio activo
+        const BIOSIMILAR_PA_MAP = {
+            'HYRIMOZ': 'Adalimumab', 'IMRALDI': 'Adalimumab',
+            'IDACIO':  'Adalimumab', 'YUFLIMA': 'Adalimumab',
+            'BENEPALI': 'Etanercept', 'ERELZI': 'Etanercept',
+            'REMSIMA': 'Infliximab',
+            'TYENNE': 'Tocilizumab', 'AVTOZMA': 'Tocilizumab',
+            'UZPRUVO': 'Ustekinumab', 'STEQEYMA': 'Ustekinumab', 'PYZCHYVA': 'Ustekinumab',
+            'OMLYCLO': 'Omalizumab'
+        };
+
+        // Detecta qué biosimilar contiene una descripción de producto
+        const getBiosimilarKey = (descripcion) => {
+            const upper = descripcion.toUpperCase();
+            return BIOSIMILARES.find(bio => upper.includes(bio)) || null;
+        };
+
         const AGRUPACIONES_PRODUCTOS = [
             'Hyrimoz 40', 'Idacio 50', 'Enbrel 50',
             'Enbrel 25', 'Benepali', 'Roactemra 162'
@@ -714,6 +731,9 @@
                 dateFrom: '',
                 dateTo: ''
             });
+            const [paFilterMode, setPaFilterMode] = useState('all'); // 'all' | 'selection'
+            const [selectedPASet, setSelectedPASet] = useState(new Set());
+            const [paSearch, setPaSearch] = useState('');
             const [filteredData, setFilteredData] = useState(null);
             const [filterOptions, setFilterOptions] = useState({
                 years: [],
@@ -1186,6 +1206,12 @@
                 if (filters.activeIngredient) {
                     filtered = filtered.filter(row => 
                         row['Descripción Principio Activo'] === filters.activeIngredient
+                    );
+                }
+
+                if (paFilterMode === 'selection' && selectedPASet.size > 0) {
+                    filtered = filtered.filter(row =>
+                        selectedPASet.has(row['Descripción Principio Activo'])
                     );
                 }
     
@@ -1908,6 +1934,7 @@
                 if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
                 if (filters.pathology) activeFilters.push(`Diagnóstico: ${filters.pathology}`);
                 if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                    if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`PA seleccionados: ${selectedPASet.size}`);
                 if (filters.dateFrom) activeFilters.push(`Desde: ${filters.dateFrom}`);
                 if (filters.dateTo) activeFilters.push(`Hasta: ${filters.dateTo}`);
 
@@ -2257,6 +2284,7 @@
                 if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
                 if (filters.pathology) activeFilters.push(`Diagnóstico: ${filters.pathology}`);
                 if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                    if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`PA seleccionados: ${selectedPASet.size}`);
                 if (filters.dateFrom) activeFilters.push(`Desde: ${filters.dateFrom}`);
                 if (filters.dateTo) activeFilters.push(`Hasta: ${filters.dateTo}`);
 
@@ -2604,6 +2632,7 @@
                 if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
                 if (filters.pathology) activeFilters.push(`Diagnóstico: ${filters.pathology}`);
                 if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                    if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`PA seleccionados: ${selectedPASet.size}`);
                 if (filters.dateFrom) activeFilters.push(`Desde: ${filters.dateFrom}`);
                 if (filters.dateTo) activeFilters.push(`Hasta: ${filters.dateTo}`);
 
@@ -2952,6 +2981,7 @@
                 if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
                 if (filters.pathology) activeFilters.push(`Diagnóstico: ${filters.pathology}`);
                 if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                    if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`PA seleccionados: ${selectedPASet.size}`);
                 if (filters.dateFrom) activeFilters.push(`Desde: ${filters.dateFrom}`);
                 if (filters.dateTo) activeFilters.push(`Hasta: ${filters.dateTo}`);
 
@@ -3275,6 +3305,7 @@
                 if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
                 if (filters.pathology) activeFilters.push(`Diagnóstico: ${filters.pathology}`);
                 if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                    if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`PA seleccionados: ${selectedPASet.size}`);
                 if (filters.dateFrom) activeFilters.push(`Desde: ${filters.dateFrom}`);
                 if (filters.dateTo) activeFilters.push(`Hasta: ${filters.dateTo}`);
 
@@ -3759,6 +3790,7 @@
                 if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
                 if (filters.pathology) activeFilters.push(`Diagnóstico: ${filters.pathology}`);
                 if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                    if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`PA seleccionados: ${selectedPASet.size}`);
                 if (filters.dateFrom) activeFilters.push(`Desde: ${filters.dateFrom}`);
                 if (filters.dateTo) activeFilters.push(`Hasta: ${filters.dateTo}`);
 
@@ -4243,6 +4275,7 @@
                 if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
                 if (filters.pathology) activeFilters.push(`Diagnóstico: ${filters.pathology}`);
                 if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                    if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`PA seleccionados: ${selectedPASet.size}`);
                 if (filters.dateFrom) activeFilters.push(`Desde: ${filters.dateFrom}`);
                 if (filters.dateTo) activeFilters.push(`Hasta: ${filters.dateTo}`);
 
@@ -4778,6 +4811,65 @@
                     services: allServices
                 };
             };
+            const calculateRacingBarDataByPA = (dataToProcess) => {
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] && row['Descripción Principio Activo']
+                );
+
+                const monthlyData = {};
+                validData.forEach(row => {
+                    const date = row['Fecha Dispensación'];
+                    const year = date.getFullYear();
+                    const month = String(date.getMonth() + 1).padStart(2, '0');
+                    const key = `${year}-${month}`;
+                    const pa = row['Descripción Principio Activo'];
+
+                    if (!monthlyData[key]) monthlyData[key] = {};
+                    if (!monthlyData[key][pa]) {
+                        monthlyData[key][pa] = { pacientes: new Set(), coste: 0 };
+                    }
+
+                    monthlyData[key][pa].pacientes.add(row['Id']);
+                    monthlyData[key][pa].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+
+                const months = Object.keys(monthlyData).sort();
+                const allPA = [...new Set(validData.map(r => r['Descripción Principio Activo']))].sort();
+                const monthNames = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+
+                // Acumuladores
+                const cumulative = {};
+                allPA.forEach(pa => { cumulative[pa] = { pacientes: new Set(), coste: 0 }; });
+
+                const frames = months.map(monthKey => {
+                    const [year, month] = monthKey.split('-');
+                    const label = `${monthNames[parseInt(month)-1]} ${year}`;
+
+                    allPA.forEach(pa => {
+                        const d = monthlyData[monthKey]?.[pa];
+                        if (d) {
+                            d.pacientes.forEach(id => cumulative[pa].pacientes.add(id));
+                            cumulative[pa].coste += d.coste;
+                        }
+                    });
+
+                    const paValues = allPA.map(pa => ({
+                        pa,
+                        pacientes: cumulative[pa].pacientes.size,
+                        coste: cumulative[pa].coste
+                    }));
+
+                    return { monthKey, label, paValues };
+                });
+
+                return {
+                    type: 'racing-pa',
+                    title: 'Evolución acumulada por principio activo',
+                    data: frames,
+                    allPA
+                };
+            };
+
             const calculatePatientList = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
                     row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
@@ -4792,6 +4884,7 @@
                 if (filters.service) activeFilters.push(`Servicio: ${filters.service}`);
                 if (filters.pathology) activeFilters.push(`Patología: ${filters.pathology}`);
                 if (filters.activeIngredient) activeFilters.push(`Principio activo: ${filters.activeIngredient}`);
+                    if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`PA seleccionados: ${selectedPASet.size}`);
                 if (filters.dateFrom) activeFilters.push(`Desde: ${filters.dateFrom}`);
                 if (filters.dateTo) activeFilters.push(`Hasta: ${filters.dateTo}`);
                 const filterDesc = activeFilters.length > 0 ? activeFilters.join(' | ') : 'Sin filtros (todos los registros)';
@@ -4888,6 +4981,9 @@
                             break;
                         case 'racing':
                             result = calculateRacingBarData(dataToProcess);
+                            break;
+                        case 'racing-pa':
+                            result = calculateRacingBarDataByPA(dataToProcess);
                             break;
                         default:
                             result = { type: 'custom', data: [], title: 'Análisis Personalizado' };
@@ -5493,21 +5589,78 @@
                 const validData = dataToProcess.filter(row =>
                     row['Fecha Dispensación'] && row['Id'] && row['Descripción Producto Dispensado']
                 );
-                const biosimilarData = validData.filter(row => {
-                    const producto = row['Descripción Producto Dispensado'].toUpperCase();
-                    return BIOSIMILARES.some(bio => producto.includes(bio));
+
+                const paConBiosimilar = new Set(Object.values(BIOSIMILAR_PA_MAP));
+                const paPatsBio   = {}; const paPatsTotal = {};
+                const paCosBio    = {}; const paCosTotal  = {}; // coste bio / coste total PA
+                const bioData     = {}; // producto → { pats: Set, coste }
+
+                validData.forEach(row => {
+                    const coste  = parseFloat(row['Coste Dispensación']) || 0;
+                    const bioKey = getBiosimilarKey(row['Descripción Producto Dispensado']);
+                    const paCanon = bioKey
+                        ? BIOSIMILAR_PA_MAP[bioKey]
+                        : (() => {
+                            const paRaw = (row['Descripción Principio Activo'] || '').toUpperCase();
+                            for (const pa of paConBiosimilar) {
+                                if (paRaw.includes(pa.toUpperCase()) || pa.toUpperCase().includes(paRaw)) return pa;
+                            }
+                            return null;
+                        })();
+
+                    if (paCanon) {
+                        if (!paPatsTotal[paCanon]) paPatsTotal[paCanon] = new Set();
+                        paPatsTotal[paCanon].add(row['Id']);
+                        paCosTotal[paCanon] = (paCosTotal[paCanon] || 0) + coste;
+                    }
+
+                    if (bioKey) {
+                        const pa = BIOSIMILAR_PA_MAP[bioKey];
+                        if (!paPatsBio[pa]) paPatsBio[pa] = new Set();
+                        paPatsBio[pa].add(row['Id']);
+                        paCosBio[pa] = (paCosBio[pa] || 0) + coste;
+                        const prod = row['Descripción Producto Dispensado'];
+                        if (!bioData[prod]) bioData[prod] = { pats: new Set(), coste: 0 };
+                        bioData[prod].pats.add(row['Id']);
+                        bioData[prod].coste += coste;
+                    }
                 });
-                const bioData = {};
-                biosimilarData.forEach(row => {
-                    const producto = row['Descripción Producto Dispensado'];
-                    if (!bioData[producto]) bioData[producto] = new Set();
-                    bioData[producto].add(row['Id']);
-                });
-                const results = Object.keys(bioData)
-                    .map(p => ({ 'Biosimilar': p, 'Pacientes': bioData[p].size }))
-                    .sort((a, b) => b['Pacientes'] - a['Pacientes']);
-                return { type: 'table', title: 'Pacientes con Biosimilares (Total)', data: results };
+
+                const fmt2 = v => v.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
+
+                const byProduct = Object.keys(bioData)
+                    .map(p => ({
+                        'Biosimilar': p,
+                        'Pacientes': bioData[p].pats.size,
+                        'Coste (€)': fmt2(bioData[p].coste)
+                    }))
+                    .sort((a, b) => bioData[b['Biosimilar']].coste - bioData[a['Biosimilar']].coste);
+
+                const byPA = Object.keys(paPatsBio).map(pa => {
+                    const conBio  = paPatsBio[pa].size;
+                    const total   = paPatsTotal[pa] ? paPatsTotal[pa].size : conBio;
+                    const cosBio  = paCosBio[pa]    || 0;
+                    const cosTot  = paCosTotal[pa]  || cosBio;
+                    return {
+                        'Principio Activo':  pa,
+                        'Pac. biosimilar':   conBio,
+                        'Pac. total PA':     total,
+                        'Penetración (%)':   total > 0 ? ((conBio / total) * 100).toFixed(1) : '0.0',
+                        'Coste biosimilar':  fmt2(cosBio),
+                        'Coste total PA':    fmt2(cosTot),
+                        '% Coste':           cosTot > 0 ? ((cosBio / cosTot) * 100).toFixed(1) : '0.0'
+                    };
+                }).sort((a, b) => parseFloat(b['Penetración (%)']) - parseFloat(a['Penetración (%)']));
+
+                return {
+                    type: 'biosim-dual',
+                    title: 'Pacientes con Biosimilares (Total)',
+                    byPA,
+                    byProduct,
+                    paColOrder: ['Principio Activo','Pac. biosimilar','Pac. total PA','Penetración (%)','Coste biosimilar','Coste total PA','% Coste']
+                };
             };
+
 
             const calculateUnitsAndCostByProductTotal = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
@@ -5717,190 +5870,297 @@
                 };
             };
 
+            // Resuelve el PA canónico (según BIOSIMILAR_PA_MAP) a partir de una fila
+            // Devuelve { paCanon, isBio } donde paCanon puede ser null si no aplica
+            const resolvePA = (row) => {
+                const bioKey = getBiosimilarKey(row['Descripción Producto Dispensado'] || '');
+                if (bioKey) return { paCanon: BIOSIMILAR_PA_MAP[bioKey], isBio: true, bioKey };
+                const paRaw = (row['Descripción Principio Activo'] || '').toUpperCase();
+                const paConBiosimilar = Object.values(BIOSIMILAR_PA_MAP);
+                for (const pa of paConBiosimilar) {
+                    if (paRaw.includes(pa.toUpperCase()) || pa.toUpperCase().includes(paRaw)) {
+                        return { paCanon: pa, isBio: false, bioKey: null };
+                    }
+                }
+                return { paCanon: null, isBio: false, bioKey: null };
+            };
+
             const calculateBiosimilarPatientsByYear = (dataToProcess) => {
-                const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && 
-                    row['Id'] && 
-                    row['Descripción Producto Dispensado']
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] && row['Descripción Producto Dispensado']
+                );
+                const biosimilarData = validData.filter(row =>
+                    getBiosimilarKey(row['Descripción Producto Dispensado'])
                 );
 
-                // Filtrar solo biosimilares
-                const biosimilarData = validData.filter(row => {
-                    const producto = row['Descripción Producto Dispensado'].toUpperCase();
-                    return BIOSIMILARES.some(bio => producto.includes(bio));
-                });
-
+                // ── Por medicamento (pivot) ──
                 const bioData = {};
-                
                 biosimilarData.forEach(row => {
                     const producto = row['Descripción Producto Dispensado'];
                     const year = row['Fecha Dispensación'].getFullYear();
-                    
-                    if (!bioData[producto]) {
-                        bioData[producto] = {};
-                    }
-                    if (!bioData[producto][year]) {
-                        bioData[producto][year] = new Set();
-                    }
-                    
-                    bioData[producto][year].add(row['Id']);
+                    if (!bioData[producto]) bioData[producto] = {};
+                    if (!bioData[producto][year]) bioData[producto][year] = { pats: new Set(), coste: 0 };
+                    bioData[producto][year].pats.add(row['Id']);
+                    bioData[producto][year].coste += parseFloat(row['Coste Dispensación']) || 0;
                 });
-
-                const years = [...new Set(biosimilarData.map(row => 
-                    row['Fecha Dispensación'].getFullYear()
-                ))].sort();
-
-                const results = Object.keys(bioData).map(producto => {
+                const years = [...new Set(biosimilarData.map(r => r['Fecha Dispensación'].getFullYear()))].sort();
+                const fmt2 = v => v.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
+                const byProduct = Object.keys(bioData).map(producto => {
                     const row = { 'Biosimilar': producto };
-                    let total = new Set();
-                    
-                    years.forEach(year => {
-                        if (bioData[producto][year]) {
-                            row[year] = bioData[producto][year].size;
-                            bioData[producto][year].forEach(id => total.add(id));
-                        } else {
-                            row[year] = 0;
-                        }
+                    let totalPats = new Set(); let totalCoste = 0;
+                    years.forEach(y => {
+                        row[`${y} Pac`]    = bioData[producto][y] ? bioData[producto][y].pats.size : 0;
+                        row[`${y} €`] = bioData[producto][y] ? fmt2(bioData[producto][y].coste) : fmt2(0);
+                        if (bioData[producto][y]) { bioData[producto][y].pats.forEach(id => totalPats.add(id)); totalCoste += bioData[producto][y].coste; }
                     });
-                    
-                    row['TOTAL'] = total.size;
+                    row['Total Pac'] = totalPats.size;
+                    row['Total €'] = fmt2(totalCoste);
                     return row;
-                }).sort((a, b) => b['TOTAL'] - a['TOTAL']);
+                }).sort((a, b) => b['Total Pac'] - a['Total Pac']);
+
+                // ── Por principio activo (penetración por año) ──
+                const paDataBio   = {}; const paDataTotal = {};
+                const paCosBio    = {}; const paCosTotal  = {};
+                validData.forEach(row => {
+                    const { paCanon, isBio } = resolvePA(row);
+                    if (!paCanon) return;
+                    const year = row['Fecha Dispensación'].getFullYear();
+                    const coste = parseFloat(row['Coste Dispensación']) || 0;
+                    if (!paDataTotal[paCanon]) paDataTotal[paCanon] = {};
+                    if (!paDataTotal[paCanon][year]) paDataTotal[paCanon][year] = new Set();
+                    paDataTotal[paCanon][year].add(row['Id']);
+                    if (!paCosTotal[paCanon]) paCosTotal[paCanon] = {};
+                    paCosTotal[paCanon][year] = (paCosTotal[paCanon][year] || 0) + coste;
+                    if (isBio) {
+                        if (!paDataBio[paCanon]) paDataBio[paCanon] = {};
+                        if (!paDataBio[paCanon][year]) paDataBio[paCanon][year] = new Set();
+                        paDataBio[paCanon][year].add(row['Id']);
+                        if (!paCosBio[paCanon]) paCosBio[paCanon] = {};
+                        paCosBio[paCanon][year] = (paCosBio[paCanon][year] || 0) + coste;
+                    }
+                });
+                const allPABio = Object.keys(paDataBio);
+                const byPA = allPABio.map(pa => {
+                    const row = { 'Principio Activo': pa };
+                    let totBioPats = new Set(); let totAllPats = new Set();
+                    let totBioCos  = 0;         let totAllCos  = 0;
+                    years.forEach(y => {
+                        const bio  = paDataBio[pa]?.[y]?.size  || 0;
+                        const tot  = paDataTotal[pa]?.[y]?.size || 0;
+                        const cBio = paCosBio[pa]?.[y]   || 0;
+                        const cTot = paCosTotal[pa]?.[y] || 0;
+                        row[`${y} Bio`]    = bio;
+                        row[`${y} Total`]  = tot;
+                        row[`${y} %Pac`]   = tot  > 0 ? ((bio/tot)*100).toFixed(1)+'%'   : '–';
+                        row[`${y} € Bio`]  = fmt2(cBio);
+                        row[`${y} € Tot`]  = fmt2(cTot);
+                        row[`${y} %€`] = cTot > 0 ? ((cBio/cTot)*100).toFixed(1)+'%' : '–';
+                        if (paDataBio[pa]?.[y])   paDataBio[pa][y].forEach(id => totBioPats.add(id));
+                        if (paDataTotal[pa]?.[y]) paDataTotal[pa][y].forEach(id => totAllPats.add(id));
+                        totBioCos += cBio; totAllCos += cTot;
+                    });
+                    row['Total Bio']     = totBioPats.size;
+                    row['Total Pac.']    = totAllPats.size;
+                    row['% Pac Global']  = totAllPats.size > 0 ? ((totBioPats.size/totAllPats.size)*100).toFixed(1)+'%' : '–';
+                    row['€ Bio']    = fmt2(totBioCos);
+                    row['€ Total']  = fmt2(totAllCos);
+                    row['% € Global'] = totAllCos > 0 ? ((totBioCos/totAllCos)*100).toFixed(1)+'%' : '–';
+                    return row;
+                }).sort((a, b) => b['Total Bio'] - a['Total Bio']);
+                const paColOrder = ['Principio Activo',
+                    ...years.flatMap(y => [`${y} Bio`,`${y} Total`,`${y} %Pac`,`${y} € Bio`,`${y} € Tot`,`${y} %€`]),
+                    'Total Bio','Total Pac.','% Pac Global','€ Bio','€ Total','% € Global'];
+                const productColOrder = ['Biosimilar', ...years.flatMap(y => [`${y} Pac`,`${y} €`]), 'Total Pac', 'Total €'];
 
                 return {
-                    type: 'pivot',
+                    type: 'biosim-dual',
                     title: 'Pacientes con Biosimilares por Años',
-                    data: results,
-                    years: years,
-                    columnOrder: ['Biosimilar', ...years.map(String), 'TOTAL']
+                    byPA, byProduct,
+                    pivotMeta: { years, columnOrder: productColOrder },
+                    paColOrder
                 };
             };
+
 
             const calculateBiosimilarPatientsByQuarter = (dataToProcess) => {
-                const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && 
-                    row['Id'] && 
-                    row['Descripción Producto Dispensado']
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] && row['Descripción Producto Dispensado']
                 );
-
-                const biosimilarData = validData.filter(row => {
-                    const producto = row['Descripción Producto Dispensado'].toUpperCase();
-                    return BIOSIMILARES.some(bio => producto.includes(bio));
-                });
+                const biosimilarData = validData.filter(row =>
+                    getBiosimilarKey(row['Descripción Producto Dispensado'])
+                );
+                const getQKey = (d) => { const y = d.getFullYear(); const q = Math.floor(d.getMonth()/3)+1; return `${y}-Q${q}`; };
 
                 const bioData = {};
-                
                 biosimilarData.forEach(row => {
                     const producto = row['Descripción Producto Dispensado'];
-                    const date = row['Fecha Dispensación'];
-                    const year = date.getFullYear();
-                    const quarter = Math.floor(date.getMonth() / 3) + 1;
-                    const key = `${year}-Q${quarter}`;
-                    
-                    if (!bioData[producto]) {
-                        bioData[producto] = {};
-                    }
-                    if (!bioData[producto][key]) {
-                        bioData[producto][key] = new Set();
-                    }
-                    
-                    bioData[producto][key].add(row['Id']);
+                    const key = getQKey(row['Fecha Dispensación']);
+                    if (!bioData[producto]) bioData[producto] = {};
+                    if (!bioData[producto][key]) bioData[producto][key] = { pats: new Set(), coste: 0 };
+                    bioData[producto][key].pats.add(row['Id']);
+                    bioData[producto][key].coste += parseFloat(row['Coste Dispensación']) || 0;
                 });
-
-                const quarters = [...new Set(biosimilarData.map(row => {
-                    const date = row['Fecha Dispensación'];
-                    const year = date.getFullYear();
-                    const quarter = Math.floor(date.getMonth() / 3) + 1;
-                    return `${year}-Q${quarter}`;
-                }))].sort();
-
-                const results = Object.keys(bioData).map(producto => {
+                const quarters = [...new Set(biosimilarData.map(r => getQKey(r['Fecha Dispensación'])))].sort();
+                const fmt2 = v => v.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
+                const byProduct = Object.keys(bioData).map(producto => {
                     const row = { 'Biosimilar': producto };
-                    let total = new Set();
-                    
-                    quarters.forEach(quarter => {
-                        if (bioData[producto][quarter]) {
-                            row[quarter] = bioData[producto][quarter].size;
-                            bioData[producto][quarter].forEach(id => total.add(id));
-                        } else {
-                            row[quarter] = 0;
-                        }
+                    let totalPats = new Set(); let totalCoste = 0;
+                    quarters.forEach(q => {
+                        row[`${q} Pac`]    = bioData[producto][q] ? bioData[producto][q].pats.size : 0;
+                        row[`${q} €`] = bioData[producto][q] ? fmt2(bioData[producto][q].coste) : fmt2(0);
+                        if (bioData[producto][q]) { bioData[producto][q].pats.forEach(id => totalPats.add(id)); totalCoste += bioData[producto][q].coste; }
                     });
-                    
-                    row['TOTAL'] = total.size;
+                    row['Total Pac'] = totalPats.size; row['Total €'] = fmt2(totalCoste);
                     return row;
-                }).sort((a, b) => b['TOTAL'] - a['TOTAL']);
+                }).sort((a, b) => b['Total Pac'] - a['Total Pac']);
+                const productColOrder = ['Biosimilar', ...quarters.flatMap(q => [`${q} Pac`,`${q} €`]), 'Total Pac','Total €'];
+
+                const paDataBio = {}; const paDataTotal = {};
+                const paCosBio  = {}; const paCosTotal  = {};
+                validData.forEach(row => {
+                    const { paCanon, isBio } = resolvePA(row);
+                    if (!paCanon) return;
+                    const key = getQKey(row['Fecha Dispensación']);
+                    const coste = parseFloat(row['Coste Dispensación']) || 0;
+                    if (!paDataTotal[paCanon]) paDataTotal[paCanon] = {};
+                    if (!paDataTotal[paCanon][key]) paDataTotal[paCanon][key] = new Set();
+                    paDataTotal[paCanon][key].add(row['Id']);
+                    if (!paCosTotal[paCanon]) paCosTotal[paCanon] = {};
+                    paCosTotal[paCanon][key] = (paCosTotal[paCanon][key] || 0) + coste;
+                    if (isBio) {
+                        if (!paDataBio[paCanon]) paDataBio[paCanon] = {};
+                        if (!paDataBio[paCanon][key]) paDataBio[paCanon][key] = new Set();
+                        paDataBio[paCanon][key].add(row['Id']);
+                        if (!paCosBio[paCanon]) paCosBio[paCanon] = {};
+                        paCosBio[paCanon][key] = (paCosBio[paCanon][key] || 0) + coste;
+                    }
+                });
+                const byPA = Object.keys(paDataBio).map(pa => {
+                    const row = { 'Principio Activo': pa };
+                    let totBioPats = new Set(); let totAllPats = new Set();
+                    let totBioCos  = 0;         let totAllCos  = 0;
+                    quarters.forEach(q => {
+                        const bio  = paDataBio[pa]?.[q]?.size  || 0;
+                        const tot  = paDataTotal[pa]?.[q]?.size || 0;
+                        const cBio = paCosBio[pa]?.[q]   || 0;
+                        const cTot = paCosTotal[pa]?.[q] || 0;
+                        row[`${q} Bio`]     = bio; row[`${q} Total`]  = tot;
+                        row[`${q} %Pac`]    = tot  > 0 ? ((bio/tot)*100).toFixed(1)+'%'   : '–';
+                        row[`${q} € Bio`]  = fmt2(cBio); row[`${q} € Tot`]  = fmt2(cTot);
+                        row[`${q} %€`] = cTot > 0 ? ((cBio/cTot)*100).toFixed(1)+'%' : '–';
+                        if (paDataBio[pa]?.[q])   paDataBio[pa][q].forEach(id => totBioPats.add(id));
+                        if (paDataTotal[pa]?.[q]) paDataTotal[pa][q].forEach(id => totAllPats.add(id));
+                        totBioCos += cBio; totAllCos += cTot;
+                    });
+                    row['Total Bio']      = totBioPats.size; row['Total Pac.']    = totAllPats.size;
+                    row['% Pac Global']   = totAllPats.size > 0 ? ((totBioPats.size/totAllPats.size)*100).toFixed(1)+'%' : '–';
+                    row['€ Bio']     = fmt2(totBioCos);  row['€ Total']  = fmt2(totAllCos);
+                    row['% € Global'] = totAllCos > 0 ? ((totBioCos/totAllCos)*100).toFixed(1)+'%' : '–';
+                    return row;
+                }).sort((a, b) => b['Total Bio'] - a['Total Bio']);
+                const paColOrder = ['Principio Activo',
+                    ...quarters.flatMap(q => [`${q} Bio`,`${q} Total`,`${q} %Pac`,`${q} € Bio`,`${q} € Tot`,`${q} %€`]),
+                    'Total Bio','Total Pac.','% Pac Global','€ Bio','€ Total','% € Global'];
 
                 return {
-                    type: 'pivot',
+                    type: 'biosim-dual',
                     title: 'Pacientes con Biosimilares por Trimestres',
-                    data: results,
-                    periods: quarters
+                    byPA, byProduct,
+                    pivotMeta: { periods: quarters, columnOrder: productColOrder },
+                    paColOrder
                 };
             };
+
 
             const calculateBiosimilarPatientsByMonth = (dataToProcess) => {
-                const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && 
-                    row['Id'] && 
-                    row['Descripción Producto Dispensado']
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] && row['Descripción Producto Dispensado']
                 );
-
-                const biosimilarData = validData.filter(row => {
-                    const producto = row['Descripción Producto Dispensado'].toUpperCase();
-                    return BIOSIMILARES.some(bio => producto.includes(bio));
-                });
+                const biosimilarData = validData.filter(row =>
+                    getBiosimilarKey(row['Descripción Producto Dispensado'])
+                );
+                const getMKey = (d) => { const y = d.getFullYear(); const m = String(d.getMonth()+1).padStart(2,'0'); return `${y}-${m}`; };
 
                 const bioData = {};
-                
                 biosimilarData.forEach(row => {
                     const producto = row['Descripción Producto Dispensado'];
-                    const date = row['Fecha Dispensación'];
-                    const year = date.getFullYear();
-                    const month = date.getMonth() + 1;
-                    const key = `${year}-${String(month).padStart(2, '0')}`;
-                    
-                    if (!bioData[producto]) {
-                        bioData[producto] = {};
-                    }
-                    if (!bioData[producto][key]) {
-                        bioData[producto][key] = new Set();
-                    }
-                    
-                    bioData[producto][key].add(row['Id']);
+                    const key = getMKey(row['Fecha Dispensación']);
+                    if (!bioData[producto]) bioData[producto] = {};
+                    if (!bioData[producto][key]) bioData[producto][key] = { pats: new Set(), coste: 0 };
+                    bioData[producto][key].pats.add(row['Id']);
+                    bioData[producto][key].coste += parseFloat(row['Coste Dispensación']) || 0;
                 });
-
-                const months = [...new Set(biosimilarData.map(row => {
-                    const date = row['Fecha Dispensación'];
-                    const year = date.getFullYear();
-                    const month = date.getMonth() + 1;
-                    return `${year}-${String(month).padStart(2, '0')}`;
-                }))].sort();
-
-                const results = Object.keys(bioData).map(producto => {
+                const months = [...new Set(biosimilarData.map(r => getMKey(r['Fecha Dispensación'])))].sort();
+                const fmt2 = v => v.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
+                const byProduct = Object.keys(bioData).map(producto => {
                     const row = { 'Biosimilar': producto };
-                    let total = new Set();
-                    
-                    months.forEach(month => {
-                        if (bioData[producto][month]) {
-                            row[month] = bioData[producto][month].size;
-                            bioData[producto][month].forEach(id => total.add(id));
-                        } else {
-                            row[month] = 0;
-                        }
+                    let totalPats = new Set(); let totalCoste = 0;
+                    months.forEach(m => {
+                        row[`${m} Pac`]    = bioData[producto][m] ? bioData[producto][m].pats.size : 0;
+                        row[`${m} €`] = bioData[producto][m] ? fmt2(bioData[producto][m].coste) : fmt2(0);
+                        if (bioData[producto][m]) { bioData[producto][m].pats.forEach(id => totalPats.add(id)); totalCoste += bioData[producto][m].coste; }
                     });
-                    
-                    row['TOTAL'] = total.size;
+                    row['Total Pac'] = totalPats.size; row['Total €'] = fmt2(totalCoste);
                     return row;
-                }).sort((a, b) => b['TOTAL'] - a['TOTAL']);
+                }).sort((a, b) => b['Total Pac'] - a['Total Pac']);
+                const productColOrder = ['Biosimilar', ...months.flatMap(m => [`${m} Pac`,`${m} €`]), 'Total Pac','Total €'];
+
+                const paDataBio = {}; const paDataTotal = {};
+                const paCosBio  = {}; const paCosTotal  = {};
+                validData.forEach(row => {
+                    const { paCanon, isBio } = resolvePA(row);
+                    if (!paCanon) return;
+                    const key = getMKey(row['Fecha Dispensación']);
+                    const coste = parseFloat(row['Coste Dispensación']) || 0;
+                    if (!paDataTotal[paCanon]) paDataTotal[paCanon] = {};
+                    if (!paDataTotal[paCanon][key]) paDataTotal[paCanon][key] = new Set();
+                    paDataTotal[paCanon][key].add(row['Id']);
+                    if (!paCosTotal[paCanon]) paCosTotal[paCanon] = {};
+                    paCosTotal[paCanon][key] = (paCosTotal[paCanon][key] || 0) + coste;
+                    if (isBio) {
+                        if (!paDataBio[paCanon]) paDataBio[paCanon] = {};
+                        if (!paDataBio[paCanon][key]) paDataBio[paCanon][key] = new Set();
+                        paDataBio[paCanon][key].add(row['Id']);
+                        if (!paCosBio[paCanon]) paCosBio[paCanon] = {};
+                        paCosBio[paCanon][key] = (paCosBio[paCanon][key] || 0) + coste;
+                    }
+                });
+                const byPA = Object.keys(paDataBio).map(pa => {
+                    const row = { 'Principio Activo': pa };
+                    let totBioPats = new Set(); let totAllPats = new Set();
+                    let totBioCos  = 0;         let totAllCos  = 0;
+                    months.forEach(m => {
+                        const bio  = paDataBio[pa]?.[m]?.size  || 0;
+                        const tot  = paDataTotal[pa]?.[m]?.size || 0;
+                        const cBio = paCosBio[pa]?.[m]   || 0;
+                        const cTot = paCosTotal[pa]?.[m] || 0;
+                        row[`${m} Bio`]     = bio; row[`${m} Total`]  = tot;
+                        row[`${m} %Pac`]    = tot  > 0 ? ((bio/tot)*100).toFixed(1)+'%'   : '–';
+                        row[`${m} € Bio`]  = fmt2(cBio); row[`${m} € Tot`]  = fmt2(cTot);
+                        row[`${m} %€`] = cTot > 0 ? ((cBio/cTot)*100).toFixed(1)+'%' : '–';
+                        if (paDataBio[pa]?.[m])   paDataBio[pa][m].forEach(id => totBioPats.add(id));
+                        if (paDataTotal[pa]?.[m]) paDataTotal[pa][m].forEach(id => totAllPats.add(id));
+                        totBioCos += cBio; totAllCos += cTot;
+                    });
+                    row['Total Bio']      = totBioPats.size; row['Total Pac.']    = totAllPats.size;
+                    row['% Pac Global']   = totAllPats.size > 0 ? ((totBioPats.size/totAllPats.size)*100).toFixed(1)+'%' : '–';
+                    row['€ Bio']     = fmt2(totBioCos);  row['€ Total']  = fmt2(totAllCos);
+                    row['% € Global'] = totAllCos > 0 ? ((totBioCos/totAllCos)*100).toFixed(1)+'%' : '–';
+                    return row;
+                }).sort((a, b) => b['Total Bio'] - a['Total Bio']);
+                const paColOrder = ['Principio Activo',
+                    ...months.flatMap(m => [`${m} Bio`,`${m} Total`,`${m} %Pac`,`${m} € Bio`,`${m} € Tot`,`${m} %€`]),
+                    'Total Bio','Total Pac.','% Pac Global','€ Bio','€ Total','% € Global'];
 
                 return {
-                    type: 'pivot',
+                    type: 'biosim-dual',
                     title: 'Pacientes con Biosimilares por Meses',
-                    data: results,
-                    periods: months
+                    byPA, byProduct,
+                    pivotMeta: { periods: months, columnOrder: productColOrder },
+                    paColOrder
                 };
             };
+
 
             const calculateUnitsAndCostByProductByYear = (dataToProcess) => {
                 const validData = dataToProcess.filter(row => 
@@ -6151,7 +6411,7 @@
                             <p>Sistema de indicadores cuantitativos · Farmacia Hospitalaria · H. U. i P. La Fe</p>
                         </div>
                         {(() => {
-                            const activeCount = [filters.year, filters.service, filters.pathology, filters.activeIngredient, filters.dateFrom, filters.dateTo].filter(Boolean).length;
+                            const activeCount = [filters.year, filters.service, filters.pathology, filters.activeIngredient, filters.dateFrom, filters.dateTo].filter(Boolean).length + (paFilterMode === 'selection' && selectedPASet.size > 0 ? 1 : 0);
                             return activeCount > 0 ? (
                                 <div style={{
                                     display: 'inline-flex',
@@ -6177,7 +6437,7 @@
                                     <span>filtro{activeCount > 1 ? 's' : ''} activo{activeCount > 1 ? 's' : ''}</span>
                                     <button
                                         onClick={() => {
-                                            setFilters({ year: '', service: '', pathology: '', activeIngredient: '', dateFrom: '', dateTo: '' });
+                                            setFilters({ year: '', service: '', pathology: '', activeIngredient: '', dateFrom: '', dateTo: '' }); setPaFilterMode('all'); setSelectedPASet(new Set()); setPaSearch('');
                                             setResults(null);
                                         }}
                                         style={{
@@ -6274,15 +6534,89 @@
             
                                     <div className="filter-group">
                                         <label>Principio activo</label>
-                                        <select 
-                                            value={filters.activeIngredient} 
-                                            onChange={(e) => setFilters({...filters, activeIngredient: e.target.value})}
+                                        <select
+                                            value={paFilterMode}
+                                            onChange={(e) => {
+                                                setPaFilterMode(e.target.value);
+                                                setResults(null);
+                                                if (e.target.value === 'all') {
+                                                    setSelectedPASet(new Set());
+                                                    setPaSearch('');
+                                                }
+                                            }}
                                         >
-                                            <option value="">Todos los principios activos</option>
-                                            {filterOptions.activeIngredients.map(pa => (
-                                                <option key={pa} value={pa}>{pa}</option>
-                                            ))}
+                                            <option value="all">Todos los principios activos</option>
+                                            <option value="selection">Selección personalizada…</option>
                                         </select>
+
+                                        {/* Panel de selección múltiple */}
+                                        {paFilterMode === 'selection' && (
+                                            <div style={{
+                                                marginTop: '0.5rem',
+                                                background: 'var(--blanco)',
+                                                border: '1px solid var(--gris-borde)',
+                                                borderRadius: 'var(--radius)',
+                                                overflow: 'hidden'
+                                            }}>
+                                                {/* Buscador y botones */}
+                                                <div style={{ padding: '0.5rem', borderBottom: '1px solid var(--gris-borde)', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="🔍 Buscar PA..."
+                                                        value={paSearch}
+                                                        onChange={e => setPaSearch(e.target.value)}
+                                                        style={{ width: '100%', padding: '0.35rem 0.5rem', fontSize: '0.8rem', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)' }}
+                                                    />
+                                                    <div style={{ display: 'flex', gap: '0.35rem' }}>
+                                                        <button
+                                                            onClick={() => setSelectedPASet(new Set(filterOptions.activeIngredients))}
+                                                            style={{ flex: 1, padding: '0.25rem', fontSize: '0.72rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--verde)', background: 'var(--blanco)', color: 'var(--verde)', cursor: 'pointer' }}
+                                                        >Todos</button>
+                                                        <button
+                                                            onClick={() => setSelectedPASet(new Set())}
+                                                            style={{ flex: 1, padding: '0.25rem', fontSize: '0.72rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--gris-borde)', background: 'var(--blanco)', color: 'var(--texto-sec)', cursor: 'pointer' }}
+                                                        >Ninguno</button>
+                                                    </div>
+                                                    {selectedPASet.size > 0 && (
+                                                        <div style={{ fontSize: '0.72rem', color: 'var(--azul)', fontWeight: '600', textAlign: 'center' }}>
+                                                            {selectedPASet.size} seleccionado{selectedPASet.size !== 1 ? 's' : ''}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                {/* Checkbox list */}
+                                                <div style={{ maxHeight: '180px', overflowY: 'auto', padding: '0.25rem 0' }}>
+                                                    {filterOptions.activeIngredients
+                                                        .filter(pa => pa.toLowerCase().includes(paSearch.toLowerCase()))
+                                                        .map(pa => {
+                                                            const isChecked = selectedPASet.has(pa);
+                                                            return (
+                                                                <label key={pa} style={{
+                                                                    display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                                                    padding: '0.25rem 0.6rem', cursor: 'pointer',
+                                                                    background: isChecked ? '#d6eaf8' : 'transparent',
+                                                                    borderLeft: isChecked ? '3px solid var(--azul-claro)' : '3px solid transparent',
+                                                                    transition: 'all 0.1s'
+                                                                }}>
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={isChecked}
+                                                                        onChange={() => {
+                                                                            setSelectedPASet(prev => {
+                                                                                const next = new Set(prev);
+                                                                                next.has(pa) ? next.delete(pa) : next.add(pa);
+                                                                                return next;
+                                                                            });
+                                                                            setResults(null);
+                                                                        }}
+                                                                        style={{ accentColor: 'var(--azul-claro)', width: '13px', height: '13px', flexShrink: 0 }}
+                                                                    />
+                                                                    <span style={{ fontSize: '0.78rem', fontWeight: isChecked ? '600' : '400', color: 'var(--texto)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pa}>{pa}</span>
+                                                                </label>
+                                                            );
+                                                        })}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
 
                                     <div className="filter-group">
@@ -6321,7 +6655,7 @@
                                         ⚠️ Filtros activos: Se procesarán {applyFilters()?.length || 0} de {data.length} registros
                                         <button 
                                             style={{marginLeft: '15px', padding: '5px 15px', background: '#2980b9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer'}}
-                                            onClick={() => setFilters({ year: '', service: '', pathology: '', activeIngredient: '', dateFrom: '', dateTo: '' })}
+                                            onClick={() => { setFilters({ year: '', service: '', pathology: '', activeIngredient: '', dateFrom: '', dateTo: '' }); setPaFilterMode('all'); setSelectedPASet(new Set()); setPaSearch(''); setResults(null); }}
                                         >
                                             Limpiar filtros
                                         </button>
@@ -6624,6 +6958,13 @@
                                         Racing bar chart mensual por servicio
                                     </span>
                                 </button>
+                                <button className="menu-button" onClick={() => processOption('racing-pa')} disabled={!data}>
+                                    <span className="number">💊</span>
+                                    Evolución por principio activo
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Racing bar chart · pacientes y coste
+                                    </span>
+                                </button>
                             </div>
                         </div>
 
@@ -6639,7 +6980,7 @@
                                 <div className="results-header">
                                     <h2>{results.title}</h2>
                                     <div className="export-buttons">
-                                        {results.type !== 'racing' && (
+                                        {!['racing','racing-pa','biosim-dual'].includes(results.type) && (
                                             <>
                                                 <button className="export-btn" onClick={exportToExcel}>
                                                     📊 Exportar Excel
@@ -6651,6 +6992,66 @@
                                         )}
                                     </div>
                                 </div>
+
+                                {/* ══ BIOSIM DUAL: PA + Medicamento ══ */}
+                                {results.type === 'biosim-dual' && (() => {
+                                    const renderTable = (data, colOrder, title, accentCol) => (
+                                        <div style={{ marginBottom: '1.5rem' }}>
+                                            <h3 style={{ fontSize: '0.95rem', fontWeight: '700', color: 'var(--azul)', marginBottom: '0.5rem', paddingLeft: '0.25rem', borderLeft: '4px solid var(--azul-claro)', paddingLeft: '0.6rem' }}>
+                                                {title}
+                                            </h3>
+                                            <div className="table-container">
+                                                <table>
+                                                    <thead>
+                                                        <tr>
+                                                            {colOrder.map(col => (
+                                                                <th key={col} style={col.includes('%') ? { color: 'var(--verde)', background: '#d5f5e355' } : {}}>{col}</th>
+                                                            ))}
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {data.map((row, i) => (
+                                                            <tr key={i}>
+                                                                {colOrder.map((col, j) => {
+                                                                    const val = row[col] ?? '–';
+                                                                    const isPct = typeof val === 'string' && val.includes('%');
+                                                                    const pctNum = isPct ? parseFloat(val) : null;
+                                                                    const isCoste = typeof val === 'string' && val.includes('€');
+                                                                    return (
+                                                                        <td key={col} style={{
+                                                                            textAlign: j === 0 ? 'left' : 'right',
+                                                                            fontWeight: j === 0 || col === accentCol ? '600' : '400',
+                                                                            fontSize: isCoste ? '0.8rem' : 'inherit',
+                                                                            background: isPct && pctNum >= 50 ? `rgba(39,174,96,${Math.min(pctNum/100*0.35,0.35)})` :
+                                                                                        isPct && pctNum >= 25 ? `rgba(230,126,34,${Math.min(pctNum/100*0.5,0.25)})` : '',
+                                                                            color: isPct ? (pctNum >= 50 ? '#1a7a3c' : pctNum >= 25 ? '#b7600e' : 'var(--texto-sec)') : 'inherit'
+                                                                        }}>
+                                                                            {val}
+                                                                        </td>
+                                                                    );
+                                                                })}
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    );
+
+                                    // Columns for byPA table
+                                    const paSimpleCols = ['Principio Activo', 'Pac. con biosimilar', 'Total pac. con PA', 'Penetración (%)'];
+                                    const paColOrder = results.paColOrder || paSimpleCols;
+                                    const productColOrder = results.pivotMeta
+                                        ? results.pivotMeta.columnOrder
+                                        : ['Biosimilar', 'Pacientes'];
+
+                                    return (
+                                        <div style={{ padding: '1.25rem' }}>
+                                            {renderTable(results.byPA, paColOrder, '📊 Penetración de biosimilares por Principio Activo', '% Pac Global')}
+                                            {renderTable(results.byProduct, productColOrder, '💊 Pacientes y coste por Medicamento Biosimilar', 'Total Pac')}
+                                        </div>
+                                    );
+                                })()}
 
                                 {/* ══ RACING BAR CHART ══ */}
                                 {results.type === 'racing' && (() => {
@@ -6842,8 +7243,292 @@
                                     return <RacingChart />;
                                 })()}
 
+                                {/* ══ RACING BAR CHART — PRINCIPIO ACTIVO ══ */}
+                                {results.type === 'racing-pa' && (() => {
+                                    const RacingPA = () => {
+                                        const MAX_PA = 10; // used only for default selection
+                                        const PALETTE = [
+                                            '#2980b9','#27ae60','#e67e22','#8e44ad','#c0392b',
+                                            '#16a085','#f39c12','#2c3e50','#1abc9c','#d35400',
+                                            '#7f8c8d','#e91e63','#3f51b5','#009688','#ff5722',
+                                            '#795548','#607d8b','#9c27b0','#00bcd4','#8bc34a'
+                                        ];
+
+                                        const allPA = results.allPA;
+                                        const frames = results.data;
+                                        const totalFrames = frames.length;
+
+                                        // Default selection: top 10 PA by final frame patients
+                                        const lastFrame = frames[totalFrames - 1];
+                                        const topByDefault = [...lastFrame.paValues]
+                                            .sort((a, b) => b.pacientes - a.pacientes)
+                                            .slice(0, MAX_PA)
+                                            .map(d => d.pa);
+
+                                        const [selected, setSelected] = React.useState(new Set(topByDefault));
+                                        const [frameIdx, setFrameIdx] = React.useState(0);
+                                        const [playing, setPlaying] = React.useState(false);
+                                        const [speed, setSpeed] = React.useState(800);
+                                        const [metric, setMetric] = React.useState('pacientes');
+                                        const [search, setSearch] = React.useState('');
+                                        const intervalRef = React.useRef(null);
+
+                                        // Assign fixed colors to selected PAs
+                                        const paColorMap = React.useMemo(() => {
+                                            const map = {};
+                                            [...selected].forEach((pa, i) => { map[pa] = PALETTE[i % PALETTE.length]; });
+                                            return map;
+                                        }, [selected]);
+
+                                        React.useEffect(() => {
+                                            if (playing) {
+                                                intervalRef.current = setInterval(() => {
+                                                    setFrameIdx(prev => {
+                                                        if (prev >= totalFrames - 1) {
+                                                            clearInterval(intervalRef.current);
+                                                            setPlaying(false);
+                                                            return prev;
+                                                        }
+                                                        return prev + 1;
+                                                    });
+                                                }, speed);
+                                            } else {
+                                                clearInterval(intervalRef.current);
+                                            }
+                                            return () => clearInterval(intervalRef.current);
+                                        }, [playing, speed]);
+
+                                        const togglePA = (pa) => {
+                                            setSelected(prev => {
+                                                const next = new Set(prev);
+                                                if (next.has(pa)) { next.delete(pa); }
+                                                else { next.add(pa); }
+                                                return next;
+                                            });
+                                        };
+
+                                        const selectTop10 = () => {
+                                            setSelected(new Set(topByDefault));
+                                        };
+                                        const selectAllPA = () => setSelected(new Set(allPA));
+                                        const selectNone = () => setSelected(new Set());
+
+                                        const frame = frames[frameIdx];
+                                        const visibleData = frame.paValues
+                                            .filter(d => selected.has(d.pa))
+                                            .sort((a, b) => b[metric] - a[metric]);
+                                        const maxVal = visibleData[0]?.[metric] || 1;
+
+                                        const formatVal = (v) => metric === 'coste'
+                                            ? v.toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) + ' €'
+                                            : v.toLocaleString('es-ES');
+
+                                        const filteredPA = allPA.filter(pa =>
+                                            pa.toLowerCase().includes(search.toLowerCase())
+                                        );
+
+                                        return (
+                                            <div>
+                                                {/* ── SELECTOR DE PA ── */}
+                                                <div style={{
+                                                    padding: '1rem 1.25rem',
+                                                    background: 'var(--gris-fondo)',
+                                                    borderBottom: '1px solid var(--gris-borde)'
+                                                }}>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                                                        <span style={{ fontWeight: '700', fontSize: '0.85rem', color: 'var(--azul)' }}>
+                                                            Principios activos ({selected.size} seleccionados)
+                                                        </span>
+                                                        <button onClick={selectTop10} style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--azul-claro)', background: 'var(--blanco)', color: 'var(--azul-claro)', cursor: 'pointer' }}>
+                                                            Top 10
+                                                        </button>
+                                                        <span style={{ fontSize: '0.72rem', color: 'var(--texto-sec)', fontStyle: 'italic' }}>
+                                                            (PA con más pacientes en el último mes del período)
+                                                        </span>
+                                                        <button onClick={selectAllPA} style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--verde)', background: 'var(--blanco)', color: 'var(--verde)', cursor: 'pointer' }}>
+                                                            Todos
+                                                        </button>
+                                                        <button onClick={selectNone} style={{ padding: '0.25rem 0.6rem', fontSize: '0.75rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--gris-borde)', background: 'var(--blanco)', color: 'var(--texto-sec)', cursor: 'pointer' }}>
+                                                            Ninguno
+                                                        </button>
+                                                        <input
+                                                            type="text" placeholder="🔍 Buscar principio activo..."
+                                                            value={search} onChange={e => setSearch(e.target.value)}
+                                                            style={{ padding: '0.3rem 0.6rem', fontSize: '0.8rem', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)', marginLeft: 'auto', width: '220px' }}
+                                                        />
+                                                    </div>
+                                                    {/* Checkbox grid */}
+                                                    <div style={{
+                                                        display: 'grid',
+                                                        gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+                                                        gap: '0.35rem',
+                                                        maxHeight: '160px',
+                                                        overflowY: 'auto',
+                                                        padding: '0.5rem',
+                                                        background: 'var(--blanco)',
+                                                        borderRadius: 'var(--radius)',
+                                                        border: '1px solid var(--gris-borde)'
+                                                    }}>
+                                                        {filteredPA.map(pa => {
+                                                            const isSelected = selected.has(pa);
+                                                            const isDisabled = false;
+                                                            const color = paColorMap[pa];
+                                                            return (
+                                                                <label key={pa} style={{
+                                                                    display: 'flex', alignItems: 'center', gap: '0.4rem',
+                                                                    cursor: isDisabled ? 'not-allowed' : 'pointer',
+                                                                    opacity: isDisabled ? 0.4 : 1,
+                                                                    padding: '0.2rem 0.4rem',
+                                                                    borderRadius: '4px',
+                                                                    background: isSelected ? `${color}18` : 'transparent',
+                                                                    border: isSelected ? `1px solid ${color}55` : '1px solid transparent',
+                                                                    transition: 'all 0.15s'
+                                                                }}>
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={isSelected}
+                                                                        disabled={isDisabled}
+                                                                        onChange={() => togglePA(pa)}
+                                                                        style={{ accentColor: color || 'var(--azul-claro)', width: '14px', height: '14px', flexShrink: 0 }}
+                                                                    />
+                                                                    {isSelected && (
+                                                                        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: color, flexShrink: 0 }} />
+                                                                    )}
+                                                                    <span style={{ fontSize: '0.75rem', fontWeight: isSelected ? '600' : '400', color: 'var(--texto)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                                                        title={pa}>{pa}</span>
+                                                                </label>
+                                                            );
+                                                        })}
+                                                        {filteredPA.length === 0 && (
+                                                            <span style={{ fontSize: '0.8rem', color: 'var(--texto-sec)', padding: '0.5rem' }}>Sin resultados</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {/* ── CONTROLES ── */}
+                                                <div style={{
+                                                    display: 'flex', flexWrap: 'wrap', gap: '0.75rem',
+                                                    alignItems: 'center', padding: '0.75rem 1.25rem',
+                                                    background: 'var(--gris-fondo)',
+                                                    borderBottom: '1px solid var(--gris-borde)'
+                                                }}>
+                                                    {/* Metric */}
+                                                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                                        {[['pacientes','👤 Pacientes'],['coste','💶 Coste']].map(([k, label]) => (
+                                                            <button key={k} onClick={() => { setMetric(k); setFrameIdx(0); setPlaying(false); }}
+                                                                style={{
+                                                                    padding: '0.35rem 0.8rem', fontSize: '0.8rem', fontWeight: '600',
+                                                                    borderRadius: 'var(--radius)', border: '2px solid',
+                                                                    borderColor: metric === k ? 'var(--azul-claro)' : 'var(--gris-borde)',
+                                                                    background: metric === k ? 'var(--azul-claro)' : 'var(--blanco)',
+                                                                    color: metric === k ? 'white' : 'var(--texto-sec)',
+                                                                    cursor: 'pointer'
+                                                                }}>{label}</button>
+                                                        ))}
+                                                    </div>
+                                                    <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                                                        <label style={{ fontSize: '0.75rem', color: 'var(--texto-sec)', fontWeight: '600' }}>Velocidad:</label>
+                                                        <select value={speed} onChange={e => setSpeed(Number(e.target.value))}
+                                                            style={{ padding: '0.3rem 0.5rem', fontSize: '0.8rem', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)', width: 'auto' }}>
+                                                            <option value={1200}>Lenta</option>
+                                                            <option value={800}>Normal</option>
+                                                            <option value={400}>Rápida</option>
+                                                            <option value={150}>Muy rápida</option>
+                                                        </select>
+                                                        <button onClick={() => { setFrameIdx(0); setPlaying(false); }}
+                                                            style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', fontWeight: '700', borderRadius: 'var(--radius)', border: '2px solid var(--gris-borde)', background: 'var(--blanco)', cursor: 'pointer' }}>⏮</button>
+                                                        <button onClick={() => setPlaying(p => !p)}
+                                                            style={{
+                                                                padding: '0.4rem 1.2rem', fontSize: '0.95rem', fontWeight: '700',
+                                                                borderRadius: 'var(--radius)', border: 'none',
+                                                                background: playing ? 'var(--naranja)' : 'var(--verde)',
+                                                                color: 'white', cursor: 'pointer', minWidth: '80px'
+                                                            }}>
+                                                            {playing ? '⏸ Pausa' : '▶ Play'}
+                                                        </button>
+                                                        <button onClick={() => setFrameIdx(p => Math.min(p + 1, totalFrames - 1))} disabled={frameIdx >= totalFrames - 1 || playing}
+                                                            style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', fontWeight: '700', borderRadius: 'var(--radius)', border: '2px solid var(--gris-borde)', background: 'var(--blanco)', cursor: 'pointer', opacity: (frameIdx >= totalFrames - 1 || playing) ? 0.4 : 1 }}>⏭</button>
+                                                    </div>
+                                                </div>
+
+                                                {/* ── TIMESTAMP + PROGRESS ── */}
+                                                <div style={{ padding: '0.75rem 1.25rem 0.25rem', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                                    <div style={{
+                                                        background: 'var(--azul)', color: 'white',
+                                                        borderRadius: 'var(--radius)', padding: '0.3rem 0.9rem',
+                                                        fontWeight: '700', fontSize: '1rem', minWidth: '90px', textAlign: 'center'
+                                                    }}>{frame.label}</div>
+                                                    <div style={{ flex: 1, height: '6px', background: 'var(--gris-borde)', borderRadius: '3px', overflow: 'hidden' }}>
+                                                        <div style={{
+                                                            width: `${((frameIdx + 1) / totalFrames) * 100}%`,
+                                                            height: '100%', background: 'var(--azul-claro)',
+                                                            transition: 'width 0.3s ease', borderRadius: '3px'
+                                                        }} />
+                                                    </div>
+                                                    <span style={{ fontSize: '0.78rem', color: 'var(--texto-sec)', whiteSpace: 'nowrap' }}>
+                                                        {frameIdx + 1} / {totalFrames}
+                                                    </span>
+                                                </div>
+
+                                                {/* Slider */}
+                                                <div style={{ padding: '0.25rem 1.25rem 0.5rem' }}>
+                                                    <input type="range" min={0} max={totalFrames - 1} value={frameIdx}
+                                                        onChange={e => { setFrameIdx(Number(e.target.value)); setPlaying(false); }}
+                                                        style={{ width: '100%', accentColor: 'var(--azul-claro)' }} />
+                                                </div>
+
+                                                {/* ── BARRAS ── */}
+                                                {selected.size === 0 ? (
+                                                    <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--texto-sec)', fontSize: '0.9rem' }}>
+                                                        Selecciona al menos un principio activo para ver el gráfico
+                                                    </div>
+                                                ) : (
+                                                    <div style={{ padding: '0.5rem 1.25rem 1.25rem' }}>
+                                                        {visibleData.map((item, i) => {
+                                                            const pct = maxVal > 0 ? (item[metric] / maxVal) * 100 : 0;
+                                                            const color = paColorMap[item.pa];
+                                                            return (
+                                                                <div key={item.pa} style={{ display: 'flex', alignItems: 'center', marginBottom: '0.55rem', gap: '0.75rem' }}>
+                                                                    <div style={{ width: '24px', textAlign: 'right', fontWeight: '700', fontSize: '0.8rem', color: 'var(--texto-sec)', flexShrink: 0 }}>{i + 1}</div>
+                                                                    <div style={{
+                                                                        width: '190px', flexShrink: 0, fontSize: '0.78rem',
+                                                                        fontWeight: '600', color: 'var(--texto)',
+                                                                        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'right'
+                                                                    }} title={item.pa}>{item.pa}</div>
+                                                                    <div style={{ flex: 1, height: '28px', background: 'var(--gris-fondo)', borderRadius: '4px', overflow: 'hidden' }}>
+                                                                        <div style={{
+                                                                            width: `${pct}%`, height: '100%',
+                                                                            background: color,
+                                                                            borderRadius: '0 4px 4px 0',
+                                                                            transition: 'width 0.5s cubic-bezier(0.4,0,0.2,1)',
+                                                                            display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+                                                                            paddingRight: '6px'
+                                                                        }}>
+                                                                            {pct > 12 && (
+                                                                                <span style={{ color: 'white', fontSize: '0.75rem', fontWeight: '700', whiteSpace: 'nowrap' }}>
+                                                                                    {formatVal(item[metric])}
+                                                                                </span>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+                                                                    {pct <= 12 && (
+                                                                        <div style={{ width: '80px', fontSize: '0.75rem', fontWeight: '700', color: 'var(--texto)', flexShrink: 0 }}>
+                                                                            {formatVal(item[metric])}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        );
+                                    };
+                                    return <RacingPA />;
+                                })()}
+
                                 {/* ══ STANDARD chart + table ══ */}
-                                {results.type !== 'racing' && (
+                                {!['racing','racing-pa','biosim-dual'].includes(results.type) && (
                                     <>
                                 {/* Gráfico del análisis */}
                                 <div className="analysis-chart-container">
