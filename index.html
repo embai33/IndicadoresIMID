@@ -2093,8 +2093,8 @@
                     canvas3.height = canvasH;
                     tempDiv.appendChild(canvas3);
 
-                    const topBio = chartData.bioData.data.slice(0, 6);
-                    const yearsBio = [...new Set(chartData.bioData.data.flatMap(row => Object.keys(row).filter(k => k !== 'Biosimilar' && k !== 'TOTAL')))].sort();
+                    const topBio = (chartData.bioData.byProduct || chartData.bioData.data || []).slice(0, 6);
+                    const yearsBio = [...new Set((chartData.bioData.byProduct || chartData.bioData.data || []).flatMap(row => Object.keys(row).filter(k => k !== 'Biosimilar' && k !== 'TOTAL' && !k.includes('€') && k.endsWith(' Pac'))))].map(k => k.replace(' Pac','')).sort();
                     const colorsBio = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
 
                     const chart3 = new Chart(canvas3, {
@@ -2103,7 +2103,7 @@
                             labels: yearsBio,
                             datasets: topBio.map((row, idx) => ({
                                 label: row.Biosimilar.substring(0, 15),
-                                data: yearsBio.map(year => row[year] || 0),
+                                data: yearsBio.map(year => row[`${year} Pac`] !== undefined ? row[`${year} Pac`] : (row[year] || 0)),
                                 borderColor: colorsBio[idx],
                                 borderWidth: 1.5,
                                 tension: 0.4
@@ -2441,8 +2441,8 @@
                     canvas3.height = canvasH;
                     tempDiv.appendChild(canvas3);
 
-                    const topBio = chartData.bioData.data.slice(0, 6);
-                    const quartersBio = [...new Set(chartData.bioData.data.flatMap(row => Object.keys(row).filter(k => k !== 'Biosimilar' && k !== 'TOTAL')))].sort();
+                    const topBio = (chartData.bioData.byProduct || chartData.bioData.data || []).slice(0, 6);
+                    const quartersBio = [...new Set((chartData.bioData.byProduct || chartData.bioData.data || []).flatMap(row => Object.keys(row).filter(k => k !== 'Biosimilar' && k !== 'TOTAL' && !k.includes('€') && k.endsWith(' Pac'))))].map(k => k.replace(' Pac','')).sort();
                     const colorsBio = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
 
                     const chart3 = new Chart(canvas3, {
@@ -2451,7 +2451,7 @@
                             labels: quartersBio,
                             datasets: topBio.map((row, idx) => ({
                                 label: row.Biosimilar.substring(0, 15),
-                                data: quartersBio.map(q => row[q] || 0),
+                                data: quartersBio.map(q => row[`${q} Pac`] !== undefined ? row[`${q} Pac`] : (row[q] || 0)),
                                 borderColor: colorsBio[idx],
                                 borderWidth: 1.5,
                                 tension: 0.4
@@ -2790,8 +2790,8 @@
                     canvas3.height = canvasH;
                     tempDiv.appendChild(canvas3);
 
-                    const topBio = chartData.bioData.data.slice(0, 6);
-                    const monthsBio = [...new Set(chartData.bioData.data.flatMap(row => Object.keys(row).filter(k => k !== 'Biosimilar' && k !== 'TOTAL')))].sort();
+                    const topBio = (chartData.bioData.byProduct || chartData.bioData.data || []).slice(0, 6);
+                    const monthsBio = [...new Set((chartData.bioData.byProduct || chartData.bioData.data || []).flatMap(row => Object.keys(row).filter(k => k !== 'Biosimilar' && k !== 'TOTAL' && !k.includes('€') && k.endsWith(' Pac'))))].map(k => k.replace(' Pac','')).sort();
                     const colorsBio = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb'];
 
                     const chart3 = new Chart(canvas3, {
@@ -2800,7 +2800,7 @@
                             labels: monthsBio,
                             datasets: topBio.map((row, idx) => ({
                                 label: row.Biosimilar.substring(0, 15),
-                                data: monthsBio.map(m => row[m] || 0),
+                                data: monthsBio.map(m => row[`${m} Pac`] !== undefined ? row[`${m} Pac`] : (row[m] || 0)),
                                 borderColor: colorsBio[idx],
                                 borderWidth: 1.5,
                                 tension: 0.4
@@ -3355,11 +3355,11 @@
                     pdf.text(paName, margin + 2, yPos + 3.5);
 
                     quarters.forEach((q, i) => {
-                        const val = row[q] || 0;
+                        const val = row[`${q} Pac`] !== undefined ? row[`${q} Pac`] : (row[q] || 0);
                         pdf.text(val.toString(), margin + 40 + (i * colWidth) + colWidth/2, yPos + 3.5, { align: 'center' });
                     });
                     pdf.setFont('helvetica', 'bold');
-                    pdf.text((row['TOTAL'] || 0).toString(), margin + 40 + (quarters.length * colWidth) + 2, yPos + 3.5);
+                    pdf.text((row['Total Pac'] || row['TOTAL'] || 0).toString(), margin + 40 + (quarters.length * colWidth) + 2, yPos + 3.5);
                     yPos += rowHeight;
                 });
 
@@ -3412,7 +3412,7 @@
                 pdf.setTextColor(0, 0, 0);
 
                 // Filas de biosimilares
-                const topBioData = bioData.data.slice(0, 15);
+                const topBioData = (bioData.byProduct || bioData.data || []).slice(0, 15);
                 topBioData.forEach((row, idx) => {
                     const bgColor = idx % 2 === 0 ? [240, 255, 245] : [255, 255, 255];
                     pdf.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
@@ -3424,11 +3424,11 @@
                     pdf.text(bioName, margin + 2, yPos + 3.5);
 
                     quarters.forEach((q, i) => {
-                        const val = row[q] || 0;
+                        const val = row[`${q} Pac`] !== undefined ? row[`${q} Pac`] : (row[q] || 0);
                         pdf.text(val.toString(), margin + 40 + (i * colWidth) + colWidth/2, yPos + 3.5, { align: 'center' });
                     });
                     pdf.setFont('helvetica', 'bold');
-                    pdf.text((row['TOTAL'] || 0).toString(), margin + 40 + (quarters.length * colWidth) + 2, yPos + 3.5);
+                    pdf.text((row['Total Pac'] || row['TOTAL'] || 0).toString(), margin + 40 + (quarters.length * colWidth) + 2, yPos + 3.5);
                     yPos += rowHeight;
                 });
 
@@ -3468,7 +3468,7 @@
                             labels: quarters,
                             datasets: topPAData.slice(0, 10).map((row, idx) => ({
                                 label: row['Principio Activo'].substring(0, 18),
-                                data: quarters.map(q => row[q] || 0),
+                                data: quarters.map(q => row[`${q} Pac`] !== undefined ? row[`${q} Pac`] : (row[q] || 0)),
                                 borderColor: colorsPA[idx],
                                 borderWidth: 2,
                                 tension: 0.4,
@@ -3632,7 +3632,7 @@
 
                     // Calcular totales biosimilares por trimestre
                     const bioTotals = quarters.map(q => {
-                        return bioData.data.reduce((sum, row) => sum + (row[q] || 0), 0);
+                        return (bioData.byProduct || bioData.data || []).reduce((sum, row) => sum + (row[`${q} Pac`] !== undefined ? row[`${q} Pac`] : (row[q] || 0)), 0);
                     });
 
                     // Gráfico 5: Biosimilares total
@@ -3696,7 +3696,7 @@
                             labels: quarters,
                             datasets: topBioData.slice(0, 10).map((row, idx) => ({
                                 label: row.Biosimilar.substring(0, 18),
-                                data: quarters.map(q => row[q] || 0),
+                                data: quarters.map(q => row[`${q} Pac`] !== undefined ? row[`${q} Pac`] : (row[q] || 0)),
                                 borderColor: colorsBio[idx],
                                 borderWidth: 2,
                                 tension: 0.4,
@@ -3840,11 +3840,11 @@
                     pdf.text(paName, margin + 2, yPos + 3.5);
 
                     years.forEach((y, i) => {
-                        const val = row[y] || 0;
+                        const val = row[`${y} Pac`] !== undefined ? row[`${y} Pac`] : (row[y] || 0);
                         pdf.text(val.toString(), margin + 50 + (i * colWidth) + colWidth/2, yPos + 3.5, { align: 'center' });
                     });
                     pdf.setFont('helvetica', 'bold');
-                    pdf.text((row['TOTAL'] || 0).toString(), margin + 50 + (years.length * colWidth) + 2, yPos + 3.5);
+                    pdf.text((row['Total Pac'] || row['TOTAL'] || 0).toString(), margin + 50 + (years.length * colWidth) + 2, yPos + 3.5);
                     yPos += rowHeight;
                 });
 
@@ -3897,7 +3897,7 @@
                 pdf.setTextColor(0, 0, 0);
 
                 // Filas de biosimilares
-                const topBioData = bioData.data.slice(0, 15);
+                const topBioData = (bioData.byProduct || bioData.data || []).slice(0, 15);
                 topBioData.forEach((row, idx) => {
                     const bgColor = idx % 2 === 0 ? [240, 255, 245] : [255, 255, 255];
                     pdf.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
@@ -3909,11 +3909,11 @@
                     pdf.text(bioName, margin + 2, yPos + 3.5);
 
                     years.forEach((y, i) => {
-                        const val = row[y] || 0;
+                        const val = row[`${y} Pac`] !== undefined ? row[`${y} Pac`] : (row[y] || 0);
                         pdf.text(val.toString(), margin + 50 + (i * colWidth) + colWidth/2, yPos + 3.5, { align: 'center' });
                     });
                     pdf.setFont('helvetica', 'bold');
-                    pdf.text((row['TOTAL'] || 0).toString(), margin + 50 + (years.length * colWidth) + 2, yPos + 3.5);
+                    pdf.text((row['Total Pac'] || row['TOTAL'] || 0).toString(), margin + 50 + (years.length * colWidth) + 2, yPos + 3.5);
                     yPos += rowHeight;
                 });
 
@@ -3953,7 +3953,7 @@
                             labels: years,
                             datasets: topPAData.slice(0, 10).map((row, idx) => ({
                                 label: row['Principio Activo'].substring(0, 18),
-                                data: years.map(y => row[y] || 0),
+                                data: years.map(y => row[`${y} Pac`] !== undefined ? row[`${y} Pac`] : (row[y] || 0)),
                                 borderColor: colorsPA[idx],
                                 borderWidth: 2,
                                 tension: 0.4,
@@ -4117,7 +4117,7 @@
 
                     // Calcular totales biosimilares por año
                     const bioTotals = years.map(y => {
-                        return bioData.data.reduce((sum, row) => sum + (row[y] || 0), 0);
+                        return (bioData.byProduct || bioData.data || []).reduce((sum, row) => sum + (row[`${y} Pac`] !== undefined ? row[`${y} Pac`] : (row[y] || 0)), 0);
                     });
 
                     // Gráfico 5: Biosimilares total
@@ -4181,7 +4181,7 @@
                             labels: years,
                             datasets: topBioData.slice(0, 10).map((row, idx) => ({
                                 label: row.Biosimilar.substring(0, 18),
-                                data: years.map(y => row[y] || 0),
+                                data: years.map(y => row[`${y} Pac`] !== undefined ? row[`${y} Pac`] : (row[y] || 0)),
                                 borderColor: colorsBio[idx],
                                 borderWidth: 2,
                                 tension: 0.4,
@@ -4375,7 +4375,7 @@
                 pdf.setTextColor(0, 0, 0);
 
                 // Filas de biosimilares
-                const topBioData = bioData.data.slice(0, 10);
+                const topBioData = (bioData.byProduct || bioData.data || []).slice(0, 10);
                 topBioData.forEach((row, idx) => {
                     const bgColor = idx % 2 === 0 ? [240, 255, 245] : [255, 255, 255];
                     pdf.setFillColor(bgColor[0], bgColor[1], bgColor[2]);
@@ -4387,7 +4387,7 @@
                     pdf.text(bioName, margin + 2, yPos + 3.5);
 
                     last12Months.forEach((m, i) => {
-                        const val = row[m] || 0;
+                        const val = row[`${m} Pac`] !== undefined ? row[`${m} Pac`] : (row[m] || 0);
                         pdf.text(val.toString(), margin + 40 + (i * colWidth) + colWidth/2, yPos + 3.5, { align: 'center' });
                     });
                     yPos += rowHeight;
@@ -4429,7 +4429,7 @@
                             labels: last12Months,
                             datasets: topPAData.slice(0, 8).map((row, idx) => ({
                                 label: row['Principio Activo'].substring(0, 18),
-                                data: last12Months.map(m => row[m] || 0),
+                                data: last12Months.map(m => row[`${m} Pac`] !== undefined ? row[`${m} Pac`] : (row[m] || 0)),
                                 borderColor: colorsPA[idx],
                                 borderWidth: 2,
                                 tension: 0.4,
@@ -4593,7 +4593,7 @@
 
                     // Calcular totales biosimilares por mes
                     const bioTotals = last12Months.map(m => {
-                        return bioData.data.reduce((sum, row) => sum + (row[m] || 0), 0);
+                        return (bioData.byProduct || bioData.data || []).reduce((sum, row) => sum + (row[`${m} Pac`] !== undefined ? row[`${m} Pac`] : (row[m] || 0)), 0);
                     });
 
                     // Gráfico 5: Biosimilares total
@@ -4657,7 +4657,7 @@
                             labels: last12Months,
                             datasets: topBioData.slice(0, 8).map((row, idx) => ({
                                 label: row.Biosimilar.substring(0, 18),
-                                data: last12Months.map(m => row[m] || 0),
+                                data: last12Months.map(m => row[`${m} Pac`] !== undefined ? row[`${m} Pac`] : (row[m] || 0)),
                                 borderColor: colorsBio[idx],
                                 borderWidth: 2,
                                 tension: 0.4,
