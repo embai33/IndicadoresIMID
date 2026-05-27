@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#1a5276">
-    <title>Dashboard analizador de dispensaciones IMID - V17</title>
+    <title>Dashboard analizador de dispensaciones IMID - V32</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -683,7 +683,8 @@
         const BIOSIMILARES = [
             'HYRIMOZ', 'IMRALDI', 'IDACIO', 'YUFLIMA',
             'BENEPALI', 'ERELZI', 'REMSIMA', 'TYENNE',
-            'AVTOZMA', 'UZPRUVO', 'STEQEYMA', 'PYZCHYVA', 'OMLYCLO'
+            'AVTOZMA', 'UZPRUVO', 'STEQEYMA', 'PYZCHYVA', 'OMLYCLO',
+            'GOBIVAZ'
         ];
 
         // Mapeo biosimilar → principio activo
@@ -694,7 +695,8 @@
             'REMSIMA': 'Infliximab',
             'TYENNE': 'Tocilizumab', 'AVTOZMA': 'Tocilizumab',
             'UZPRUVO': 'Ustekinumab', 'STEQEYMA': 'Ustekinumab', 'PYZCHYVA': 'Ustekinumab',
-            'OMLYCLO': 'Omalizumab'
+            'OMLYCLO': 'Omalizumab',
+            'GOBIVAZ': 'Golimumab'
         };
 
         // Detecta qué biosimilar contiene una descripción de producto
@@ -721,6 +723,7 @@
             const [dragOver, setDragOver] = useState(false);
             const [reportLoading, setReportLoading] = useState(false);
             const [reportGenerated, setReportGenerated] = useState(false);
+            const [reportTopic, setReportTopic] = useState('seguimiento');           // 'seguimiento' | 'biosimilares'
             const [reportGranularity, setReportGranularity] = useState('years');   // 'years' | 'quarters' | 'months'
             const [reportFormat, setReportFormat] = useState('complete');           // 'complete' | 'compact'
             const [showInfoModal, setShowInfoModal] = useState(false);
@@ -1602,11 +1605,12 @@
                     'UZPRUVO': 'USTEKINUMAB',
                     'STEQEYMA': 'USTEKINUMAB',
                     'PYZCHYVA': 'USTEKINUMAB',
-                    'OMLYCLO': 'OMALIZUMAB'
+                    'OMLYCLO': 'OMALIZUMAB',
+                    'GOBIVAZ': 'GOLIMUMAB'
                 };
 
                 // PA que tienen biosimilar disponible
-                const PA_WITH_BIOSIMILAR = ['ADALIMUMAB', 'ETANERCEPT', 'INFLIXIMAB', 'TOCILIZUMAB', 'USTEKINUMAB', 'OMALIZUMAB'];
+                const PA_WITH_BIOSIMILAR = ['ADALIMUMAB', 'ETANERCEPT', 'INFLIXIMAB', 'TOCILIZUMAB', 'USTEKINUMAB', 'OMALIZUMAB', 'GOLIMUMAB'];
 
                 const validData = dataToProcess.filter(row => 
                     row['Fecha Dispensación'] && 
@@ -1717,10 +1721,10 @@
                 return { services };
             };
             
-                        // Dispatcher unificado para los informes de seguimiento.
-                        // Recibe granularidad (years | quarters | months) y formato (complete | compact)
-                        // y llama a la función concreta.
-                        const generateSeguimientoReport = async (granularity, format) => {
+                        // Dispatcher unificado para los informes.
+                        // Recibe topic (seguimiento | biosimilares), granularidad (years | quarters | months)
+                        // y formato (complete | compact), y llama a la función concreta.
+                        const generateSeguimientoReport = async (granularity, format, topic = 'seguimiento') => {
                             if (!data) {
                                 alert('Por favor, carga un archivo Excel primero');
                                 return;
@@ -1729,16 +1733,21 @@
                             setReportGenerated(false);
                             try {
                                 const dataToProcess = applyFilters() || data;
-                                // Mapeo provisional: los formatos completos siguen usando las
-                                // funciones antiguas hasta que las sustituyamos; los compactos
-                                // aún no existen, así que mostramos aviso.
-                                if (format === 'complete') {
-                                    if (granularity === 'years')         await generateReportSeguimientoAnual(dataToProcess);
-                                    else if (granularity === 'quarters') await generateReportSeguimientoTrimestral(dataToProcess);
-                                    else                                  await generateReportSeguimientoMensual(dataToProcess);
+                                if (topic === 'biosimilares') {
+                                    if (format === 'complete') {
+                                        await generateReportBiosimilaresCompleto(dataToProcess, granularity);
+                                    } else {
+                                        await generateReportBiosimilaresCompacto(dataToProcess, granularity);
+                                    }
                                 } else {
-                                    // Formato compacto: 1 página A4 horizontal
-                                    await generateReportSeguimientoCompacto(dataToProcess, granularity);
+                                    // topic === 'seguimiento'
+                                    if (format === 'complete') {
+                                        if (granularity === 'years')         await generateReportSeguimientoAnual(dataToProcess);
+                                        else if (granularity === 'quarters') await generateReportSeguimientoTrimestral(dataToProcess);
+                                        else                                  await generateReportSeguimientoMensual(dataToProcess);
+                                    } else {
+                                        await generateReportSeguimientoCompacto(dataToProcess, granularity);
+                                    }
                                 }
                                 setReportLoading(false);
                                 setReportGenerated(true);
@@ -1944,6 +1953,427 @@
 
                     pdf.setTextColor(0, 0, 0);
                 }
+            };
+
+            // ============================================================
+            // INFORME INDIVIDUAL DE PACIENTE — PDF
+            // ============================================================
+            const generatePatientReportPDF = async (patient, activeFilters) => {
+                if (!patient || !patient.found) {
+                    alert('No hay datos del paciente para generar el informe.');
+                    return;
+                }
+
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const pageWidth = 210;
+                const pageHeight = 297;
+                const M = 15;                  // margen lateral
+                const contentW = pageWidth - 2 * M;
+                const BOTTOM_LIMIT = 275;      // por encima del footer
+
+                // Color institucional (mismo violeta/azul del resto de PDFs)
+                const C_PRIM = [102, 126, 234];        // azul-violeta primario
+                const C_DARK = [27, 67, 84];           // azul oscuro
+                const C_GREEN = [40, 167, 69];
+                const C_ORANGE = [230, 126, 34];
+                const C_RED = [192, 57, 43];
+                const C_GREY_BG = [245, 247, 250];
+                const C_GREY_LINE = [220, 225, 232];
+                const C_TEXT = [44, 62, 80];
+                const C_TEXT_SOFT = [93, 109, 126];
+
+                // Helper para asegurar espacio antes de pintar un bloque
+                const ensureSpace = (currentY, needed) => {
+                    if (currentY + needed > BOTTOM_LIMIT) {
+                        pdf.addPage();
+                        addPDFHeader(pdf, 'Informe individual de paciente');
+                        return 35;
+                    }
+                    return currentY;
+                };
+
+                // ── Cabecera de la primera página ──
+                addPDFHeader(pdf, 'Informe individual de paciente');
+                let y = 35;
+
+                // ── Bandera con ID del paciente ──
+                pdf.setFillColor(...C_PRIM);
+                pdf.roundedRect(M, y, contentW, 16, 3, 3, 'F');
+                pdf.setTextColor(255, 255, 255);
+                pdf.setFontSize(9);
+                pdf.setFont('helvetica', 'normal');
+                pdf.text('PACIENTE', M + 4, y + 6);
+                pdf.setFontSize(15);
+                pdf.setFont('helvetica', 'bold');
+                pdf.text(`ID ${patient.id}`, M + 4, y + 13);
+                // Datos a la derecha de la bandera
+                pdf.setFontSize(8);
+                pdf.setFont('helvetica', 'normal');
+                pdf.text(`${patient.dispensaciones.length} dispensaciones`, pageWidth - M - 4, y + 6, { align: 'right' });
+                pdf.text(`${patient.tratamientos.length} tratamiento${patient.tratamientos.length !== 1 ? 's' : ''}`, pageWidth - M - 4, y + 11, { align: 'right' });
+                if (patient.devoluciones) {
+                    pdf.text(`${patient.devoluciones.length} devoluci${patient.devoluciones.length !== 1 ? 'ones' : 'ón'}`, pageWidth - M - 4, y + 14, { align: 'right' });
+                }
+                y += 22;
+
+                // ── Filtros activos (si los hay) ──
+                const filterChips = [];
+                if (activeFilters) {
+                    if (activeFilters.year) filterChips.push(`Año: ${activeFilters.year}`);
+                    if (activeFilters.service) filterChips.push(`Servicio: ${activeFilters.service}`);
+                    if (activeFilters.pathology) filterChips.push(`Patología: ${activeFilters.pathology}`);
+                    if (activeFilters.activeIngredient) filterChips.push(`PA: ${activeFilters.activeIngredient}`);
+                    if (activeFilters.dateFrom) filterChips.push(`Desde: ${activeFilters.dateFrom}`);
+                    if (activeFilters.dateTo) filterChips.push(`Hasta: ${activeFilters.dateTo}`);
+                }
+                if (filterChips.length > 0) {
+                    pdf.setFillColor(234, 242, 248);
+                    pdf.roundedRect(M, y, contentW, 10, 2, 2, 'F');
+                    pdf.setTextColor(...C_DARK);
+                    pdf.setFontSize(7);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.text('FILTROS APLICADOS', M + 3, y + 4);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(8);
+                    pdf.text(filterChips.join('  ·  '), M + 3, y + 8);
+                    y += 14;
+                } else {
+                    pdf.setFontSize(7);
+                    pdf.setTextColor(...C_TEXT_SOFT);
+                    pdf.setFont('helvetica', 'italic');
+                    pdf.text('Informe sin filtros aplicados · todo el histórico disponible del paciente', M, y + 3);
+                    y += 8;
+                }
+
+                // ── KPIs principales (4 tarjetas) ──
+                const kpiH = 18;
+                const kpiW = (contentW - 3 * 3) / 4;
+                const kpis = [
+                    ['Dispensaciones', patient.dispensaciones.length.toLocaleString('es-ES'), C_PRIM],
+                    ['Unidades totales', patient.totalUnidades.toLocaleString('es-ES'), C_GREEN],
+                    ['Coste total', `${patient.totalCoste.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €`, C_ORANGE],
+                    ['Tratamientos', patient.tratamientos.length.toString(), C_DARK],
+                ];
+                kpis.forEach((kpi, i) => {
+                    const kx = M + i * (kpiW + 3);
+                    pdf.setFillColor(...C_GREY_BG);
+                    pdf.roundedRect(kx, y, kpiW, kpiH, 2, 2, 'F');
+                    // barra superior coloreada
+                    pdf.setFillColor(...kpi[2]);
+                    pdf.rect(kx, y, kpiW, 1.5, 'F');
+                    // etiqueta
+                    pdf.setTextColor(...C_TEXT_SOFT);
+                    pdf.setFontSize(7);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.text(kpi[0].toUpperCase(), kx + kpiW / 2, y + 6, { align: 'center' });
+                    // valor
+                    pdf.setTextColor(...kpi[2]);
+                    pdf.setFontSize(12);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.text(kpi[1], kx + kpiW / 2, y + 13.5, { align: 'center' });
+                });
+                y += kpiH + 8;
+
+                // ── Cabecera "Detalle por tratamiento" ──
+                y = ensureSpace(y, 12);
+                pdf.setTextColor(...C_PRIM);
+                pdf.setFontSize(11);
+                pdf.setFont('helvetica', 'bold');
+                pdf.text('Detalle por tratamiento', M, y);
+                pdf.setDrawColor(...C_PRIM);
+                pdf.setLineWidth(0.5);
+                pdf.line(M, y + 1.5, M + 50, y + 1.5);
+                y += 8;
+
+                // ── Bucle de tratamientos ──
+                patient.tratamientos.forEach((tto, ttoIdx) => {
+                    // calcular cuánto espacio aproximado se necesita
+                    const tableMinHeight = 30 + Math.min(tto.dispensaciones.length, 5) * 6;
+                    y = ensureSpace(y, tableMinHeight);
+
+                    // Banner del tratamiento
+                    pdf.setFillColor(240, 230, 255);
+                    pdf.setDrawColor(118, 75, 162);
+                    pdf.setLineWidth(0.8);
+                    pdf.roundedRect(M, y, contentW, 9, 2, 2, 'FD');
+                    // línea de acento
+                    pdf.setFillColor(118, 75, 162);
+                    pdf.rect(M, y, 1.5, 9, 'F');
+                    pdf.setTextColor(118, 75, 162);
+                    pdf.setFontSize(10);
+                    pdf.setFont('helvetica', 'bold');
+                    const ttoLabel = patient.multipleTratamientos
+                        ? `Tratamiento ${ttoIdx + 1}: ${tto.principioActivo}`
+                        : tto.principioActivo;
+                    pdf.text(ttoLabel, M + 4, y + 6);
+                    // mini cifras a la derecha
+                    pdf.setFontSize(8);
+                    pdf.setTextColor(...C_TEXT_SOFT);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.text(`${tto.dispensaciones.length} disp.`, pageWidth - M - 4, y + 6, { align: 'right' });
+                    y += 12;
+
+                    // Sub-KPIs del tratamiento (3 tarjetas más pequeñas)
+                    const sk_h = 14;
+                    const sk_w = (contentW - 2 * 3) / 3;
+                    const adhColor = tto.adherencia === null ? C_TEXT_SOFT
+                                    : tto.adherencia >= 80 ? C_GREEN
+                                    : tto.adherencia >= 50 ? C_ORANGE
+                                    : C_RED;
+                    const adhValue = tto.adherencia === null
+                        ? 'No calculable'
+                        : `${tto.adherencia.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})}%`;
+                    const subKpis = [
+                        ['Unidades', tto.totalUnidades.toLocaleString('es-ES'), C_DARK],
+                        ['Coste', `${tto.totalCoste.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €`, C_ORANGE],
+                        ['Adherencia (MPR)', adhValue, adhColor],
+                    ];
+                    subKpis.forEach((kpi, i) => {
+                        const kx = M + i * (sk_w + 3);
+                        pdf.setFillColor(250, 250, 252);
+                        pdf.setDrawColor(...C_GREY_LINE);
+                        pdf.setLineWidth(0.3);
+                        pdf.roundedRect(kx, y, sk_w, sk_h, 1.5, 1.5, 'FD');
+                        pdf.setTextColor(...C_TEXT_SOFT);
+                        pdf.setFontSize(7);
+                        pdf.setFont('helvetica', 'normal');
+                        pdf.text(kpi[0], kx + 2.5, y + 4.5);
+                        pdf.setTextColor(...kpi[2]);
+                        pdf.setFontSize(10);
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.text(kpi[1], kx + 2.5, y + 10);
+                    });
+                    y += sk_h + 1;
+
+                    // Nota MPR si no es calculable o si tiene warning
+                    if (tto.adherencia === null && tto.adherenciaMotivo) {
+                        pdf.setTextColor(...C_TEXT_SOFT);
+                        pdf.setFontSize(7);
+                        pdf.setFont('helvetica', 'italic');
+                        const motivoLines = pdf.splitTextToSize(`Adherencia: ${tto.adherenciaMotivo}`, contentW);
+                        pdf.text(motivoLines, M, y + 3);
+                        y += 3 + motivoLines.length * 3;
+                    } else if (tto.adherencia !== null) {
+                        pdf.setTextColor(...C_TEXT_SOFT);
+                        pdf.setFontSize(7);
+                        pdf.setFont('helvetica', 'italic');
+                        pdf.text(`${tto.diasCubiertos} días cubiertos / ${tto.diasTotales} días totales`, M, y + 3);
+                        y += 5;
+                    }
+
+                    // Tabla de dispensaciones del tratamiento
+                    // Reparto de columnas (ancho útil = 180 mm):
+                    //   Fecha 18 · Medicamento 58 · Cant. 10 · Coste 18 · Servicio 30 · Patología 35
+                    const colDefs = [
+                        { x: M + 1,                                            w: 18, label: 'Fecha',       align: 'left',  wrap: false },
+                        { x: M + 20,                                           w: 58, label: 'Medicamento', align: 'left',  wrap: true  },
+                        { x: M + 80,                                           w: 10, label: 'Cant.',       align: 'right', wrap: false },
+                        { x: M + 92,                                           w: 18, label: 'Coste',       align: 'right', wrap: false },
+                        { x: M + 112,                                          w: 30, label: 'Servicio',    align: 'left',  wrap: true  },
+                        { x: M + 144,                                          w: 35, label: 'Patología',   align: 'left',  wrap: true  },
+                    ];
+                    const MAX_LINES = 3;        // tope de líneas por celda con wrap
+                    const LINE_H    = 3.2;      // alto de línea de texto a 7 pt
+                    const ROW_PAD_V = 1.5;      // padding vertical dentro de la fila
+
+                    const drawTableHeader = (yPos, customLabel = null) => {
+                        pdf.setFillColor(...C_DARK);
+                        pdf.rect(M, yPos, contentW, 7, 'F');
+                        pdf.setTextColor(255, 255, 255);
+                        pdf.setFontSize(7.5);
+                        pdf.setFont('helvetica', 'bold');
+                        colDefs.forEach((col, i) => {
+                            const label = (i === 1 && customLabel) ? customLabel : col.label;
+                            const tx = col.align === 'right' ? col.x + col.w - 1 : col.x;
+                            pdf.text(label, tx, yPos + 5, { align: col.align });
+                        });
+                        return yPos + 7;
+                    };
+
+                    // Trunca un texto con elipsis para que quepa exactamente en `maxLines` líneas
+                    // dentro del ancho dado, usando la fuente actualmente seleccionada.
+                    const wrapWithLimit = (text, width, maxLines) => {
+                        const lines = pdf.splitTextToSize(text, width);
+                        if (lines.length <= maxLines) return lines;
+                        // Tomamos las maxLines primeras; en la última recortamos y añadimos elipsis
+                        const trimmed = lines.slice(0, maxLines);
+                        let last = trimmed[maxLines - 1];
+                        // Ir recortando carácteres hasta que con "…" entre dentro del ancho
+                        while (last.length > 0 && pdf.getStringUnitWidth(last + '…') * 7 / pdf.internal.scaleFactor > width) {
+                            last = last.slice(0, -1);
+                        }
+                        trimmed[maxLines - 1] = (last.replace(/[\s,.;:]+$/, '') + '…');
+                        return trimmed;
+                    };
+
+                    y = ensureSpace(y, 14);
+                    y = drawTableHeader(y);
+
+                    // filas
+                    pdf.setFontSize(7);
+                    pdf.setFont('helvetica', 'normal');
+                    tto.dispensaciones.forEach((row) => {
+                        const fecha = row['Fecha Dispensación']
+                            ? row['Fecha Dispensación'].toLocaleDateString('es-ES')
+                            : '-';
+                        const med       = (row['Descripción Producto Dispensado'] || '-');
+                        const cant      = (row['Cantidad'] !== undefined && row['Cantidad'] !== null) ? row['Cantidad'].toString() : '-';
+                        const coste     = `${(parseFloat(row['Coste Dispensación']) || 0).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €`;
+                        const servicio  = (row['Servicio Prescriptor'] || '-');
+                        const patologia = (row['Patología'] || '-');
+
+                        // Asegurar que pdf usa la fuente correcta antes de medir
+                        pdf.setFontSize(7);
+                        pdf.setFont('helvetica', 'normal');
+
+                        // Calcular wrap de las celdas que lo necesitan
+                        const padW = 1; // pequeño padding lateral interno
+                        const medLines = wrapWithLimit(med,       colDefs[1].w - padW, MAX_LINES);
+                        const srvLines = wrapWithLimit(servicio,  colDefs[4].w - padW, MAX_LINES);
+                        const patLines = wrapWithLimit(patologia, colDefs[5].w - padW, MAX_LINES);
+
+                        const maxLines = Math.max(1, medLines.length, srvLines.length, patLines.length);
+                        const rowH = Math.max(6, ROW_PAD_V * 2 + maxLines * LINE_H);
+
+                        // Si la fila no cabe en la página actual, saltamos y reimprimimos cabecera
+                        if (y + rowH > BOTTOM_LIMIT) {
+                            pdf.addPage();
+                            addPDFHeader(pdf, 'Informe individual de paciente');
+                            y = 35;
+                            y = drawTableHeader(y, `Medicamento (cont. — ${ttoLabel})`);
+                            pdf.setFontSize(7);
+                            pdf.setFont('helvetica', 'normal');
+                        }
+
+                        // Fondo alterno (alternancia local por índice de fila ya dibujada en esta página)
+                        // — para mantener la legibilidad usamos el índice "global" en el array
+                        // (no hace falta perfección, basta con alternar)
+                        const idxLocal = tto.dispensaciones.indexOf(row);
+                        if (idxLocal % 2 === 0) {
+                            pdf.setFillColor(...C_GREY_BG);
+                            pdf.rect(M, y, contentW, rowH, 'F');
+                        }
+                        pdf.setTextColor(...C_TEXT);
+
+                        // Línea base del texto (top de la primera línea)
+                        const textBaseY = y + ROW_PAD_V + 2.4;
+
+                        // Fecha (no wrap)
+                        pdf.text(fecha, colDefs[0].x, textBaseY);
+                        // Medicamento (multi-línea)
+                        pdf.text(medLines, colDefs[1].x, textBaseY);
+                        // Cantidad
+                        pdf.text(cant, colDefs[2].x + colDefs[2].w - 1, textBaseY, { align: 'right' });
+                        // Coste
+                        pdf.text(coste, colDefs[3].x + colDefs[3].w - 1, textBaseY, { align: 'right' });
+                        // Servicio (multi-línea si hace falta)
+                        pdf.text(srvLines, colDefs[4].x, textBaseY);
+                        // Patología (multi-línea si hace falta)
+                        pdf.text(patLines, colDefs[5].x, textBaseY);
+
+                        y += rowH;
+                    });
+                    y += 8; // separación entre tratamientos
+                });
+
+                // ── Devoluciones (si las hay) ──
+                if (patient.devoluciones && patient.devoluciones.length > 0) {
+                    y = ensureSpace(y, 30);
+                    // Banner naranja
+                    pdf.setFillColor(254, 245, 231);
+                    pdf.setDrawColor(...C_ORANGE);
+                    pdf.setLineWidth(0.8);
+                    pdf.roundedRect(M, y, contentW, 10, 2, 2, 'FD');
+                    pdf.setFillColor(...C_ORANGE);
+                    pdf.rect(M, y, 1.5, 10, 'F');
+                    pdf.setTextColor(...C_ORANGE);
+                    pdf.setFontSize(10);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.text(`Devoluciones registradas (${patient.devoluciones.length})`, M + 4, y + 6.5);
+                    y += 13;
+
+                    pdf.setTextColor(...C_TEXT_SOFT);
+                    pdf.setFontSize(7);
+                    pdf.setFont('helvetica', 'italic');
+                    const noteLines = pdf.splitTextToSize(
+                        'Las siguientes dispensaciones con cantidad negativa NO se han incluido en los cálculos anteriores ni en el MPR.',
+                        contentW
+                    );
+                    pdf.text(noteLines, M, y);
+                    y += noteLines.length * 3 + 2;
+
+                    // Tabla de devoluciones
+                    // Reparto (ancho útil = 180 mm): Fecha 20 · Medicamento 120 · Cant. 14 · Coste 26
+                    const dColDefs = [
+                        { x: M + 1,                                w: 18,  label: 'Fecha',       align: 'left',  wrap: false },
+                        { x: M + 20,                               w: 118, label: 'Medicamento', align: 'left',  wrap: true  },
+                        { x: M + 140,                              w: 12,  label: 'Cant.',       align: 'right', wrap: false },
+                        { x: M + 153,                              w: 26,  label: 'Coste',       align: 'right', wrap: false },
+                    ];
+                    const D_MAX_LINES = 3;
+
+                    const drawDevHeader = (yPos) => {
+                        pdf.setFillColor(...C_ORANGE);
+                        pdf.rect(M, yPos, contentW, 7, 'F');
+                        pdf.setTextColor(255, 255, 255);
+                        pdf.setFontSize(7.5);
+                        pdf.setFont('helvetica', 'bold');
+                        dColDefs.forEach((col) => {
+                            const tx = col.align === 'right' ? col.x + col.w - 1 : col.x;
+                            pdf.text(col.label, tx, yPos + 5, { align: col.align });
+                        });
+                        return yPos + 7;
+                    };
+                    y = drawDevHeader(y);
+
+                    pdf.setFontSize(7);
+                    pdf.setFont('helvetica', 'normal');
+                    patient.devoluciones.forEach((row, idx) => {
+                        const fecha = row['Fecha Dispensación']
+                            ? row['Fecha Dispensación'].toLocaleDateString('es-ES')
+                            : '-';
+                        const med   = (row['Descripción Producto Dispensado'] || '-');
+                        const cant  = (row['Cantidad'] !== undefined && row['Cantidad'] !== null) ? row['Cantidad'].toString() : '-';
+                        const coste = `${(parseFloat(row['Coste Dispensación']) || 0).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €`;
+
+                        pdf.setFontSize(7);
+                        pdf.setFont('helvetica', 'normal');
+
+                        const medLines = wrapWithLimit(med, dColDefs[1].w - 1, D_MAX_LINES);
+                        const maxLines = Math.max(1, medLines.length);
+                        const rowH = Math.max(6, ROW_PAD_V * 2 + maxLines * LINE_H);
+
+                        if (y + rowH > BOTTOM_LIMIT) {
+                            pdf.addPage();
+                            addPDFHeader(pdf, 'Informe individual de paciente');
+                            y = 35;
+                            y = drawDevHeader(y);
+                            pdf.setFontSize(7);
+                            pdf.setFont('helvetica', 'normal');
+                        }
+
+                        if (idx % 2 === 0) {
+                            pdf.setFillColor(255, 248, 240);
+                            pdf.rect(M, y, contentW, rowH, 'F');
+                        }
+                        pdf.setTextColor(...C_RED);
+                        const textBaseY = y + ROW_PAD_V + 2.4;
+
+                        pdf.text(fecha,    dColDefs[0].x, textBaseY);
+                        pdf.text(medLines, dColDefs[1].x, textBaseY);
+                        pdf.text(cant,     dColDefs[2].x + dColDefs[2].w - 1, textBaseY, { align: 'right' });
+                        pdf.text(coste,    dColDefs[3].x + dColDefs[3].w - 1, textBaseY, { align: 'right' });
+                        y += rowH;
+                    });
+                }
+
+                // ── Footer común ──
+                addPDFFooter(pdf);
+
+                // ── Guardado ──
+                const fechaFile = new Date().toISOString().slice(0, 10);
+                pdf.save(`Informe_paciente_${patient.id}_${fechaFile}.pdf`);
             };
 
                         const generateReport1 = async (dataToProcess) => {
@@ -3769,7 +4199,7 @@
 
                     // Calcular: por cada PA con biosimilar disponible,
                     // pacientes únicos con biosim y total únicos con ese PA.
-                    const PA_WITH_BIO_LIST = ['ADALIMUMAB', 'ETANERCEPT', 'INFLIXIMAB', 'TOCILIZUMAB', 'USTEKINUMAB', 'OMALIZUMAB'];
+                    const PA_WITH_BIO_LIST = ['ADALIMUMAB', 'ETANERCEPT', 'INFLIXIMAB', 'TOCILIZUMAB', 'USTEKINUMAB', 'OMALIZUMAB', 'GOLIMUMAB'];
                     const paBioStats = {};
                     dataToProcess.forEach(row => {
                         if (!row['Id'] || !row['Descripción Principio Activo']) return;
@@ -4417,7 +4847,7 @@
                     ch3.destroy();
 
                     // Top PA con biosim
-                    const PA_WITH_BIO_LIST = ['ADALIMUMAB', 'ETANERCEPT', 'INFLIXIMAB', 'TOCILIZUMAB', 'USTEKINUMAB', 'OMALIZUMAB'];
+                    const PA_WITH_BIO_LIST = ['ADALIMUMAB', 'ETANERCEPT', 'INFLIXIMAB', 'TOCILIZUMAB', 'USTEKINUMAB', 'OMALIZUMAB', 'GOLIMUMAB'];
                     const paBioStats = {};
                     dataToProcess.forEach(row => {
                         if (!row['Id'] || !row['Descripción Principio Activo']) return;
@@ -6156,7 +6586,7 @@
                     ch3.destroy();
 
                     // Top PA con biosim (igual que en Dashboard compacto)
-                    const PA_WITH_BIO_LIST = ['ADALIMUMAB', 'ETANERCEPT', 'INFLIXIMAB', 'TOCILIZUMAB', 'USTEKINUMAB', 'OMALIZUMAB'];
+                    const PA_WITH_BIO_LIST = ['ADALIMUMAB', 'ETANERCEPT', 'INFLIXIMAB', 'TOCILIZUMAB', 'USTEKINUMAB', 'OMALIZUMAB', 'GOLIMUMAB'];
                     const paBioStats = {};
                     dataToProcess.forEach(row => {
                         if (!row['Id'] || !row['Descripción Principio Activo']) return;
@@ -6304,6 +6734,1300 @@
                 generateReportSeguimiento(dataToProcess, 'quarters');
             const generateReportSeguimientoMensual = (dataToProcess) =>
                 generateReportSeguimiento(dataToProcess, 'months');
+
+            // ============================================================================
+            // INFORME COMPLETO DE BIOSIMILARES — multi-página A4 vertical
+            // Hereda la estética del informe de seguimiento (mismas paletas, helpers y
+            // tipografías), pero enfocado al seguimiento específico de biosimilares.
+            // ============================================================================
+            const generateReportBiosimilaresCompleto = async (dataToProcess, granularity) => {
+                console.log(`📄 Iniciando Biosimilares Completo (${granularity})…`);
+
+                // ===== CONFIGURACIÓN POR GRANULARIDAD =====
+                const GRAN = (() => {
+                    if (granularity === 'quarters') {
+                        return {
+                            label: 'Trimestral',
+                            calcBio: calculateBiosimilarPatientsByQuarter,
+                            shortLabel: (p) => {
+                                const m = p.match(/(\d{4})-Q(\d)/);
+                                return m ? `${m[1].substring(2)}·T${m[2]}` : p;
+                            },
+                            maxCols: 8,
+                            periodPlural: 'trimestres'
+                        };
+                    } else if (granularity === 'months') {
+                        return {
+                            label: 'Mensual',
+                            calcBio: calculateBiosimilarPatientsByMonth,
+                            shortLabel: (p) => {
+                                const m = p.match(/(\d{4})-(\d{2})/);
+                                if (!m) return p;
+                                const meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+                                return `${meses[parseInt(m[2],10)-1]} ${m[1].substring(2)}`;
+                            },
+                            maxCols: 12,
+                            periodPlural: 'meses'
+                        };
+                    } else {
+                        return {
+                            label: 'Anual',
+                            calcBio: calculateBiosimilarPatientsByYear,
+                            shortLabel: (p) => String(p),
+                            maxCols: 999,
+                            periodPlural: 'años'
+                        };
+                    }
+                })();
+
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const PAGE_W = 210, PAGE_H = 297, M = 15, W = PAGE_W - M * 2;
+
+                // ===== PALETA — coherente con el seguimiento, con acento mint biosim =====
+                const COLOR = {
+                    petrol:    [27, 67, 84],
+                    petrolDk:  [16, 45, 58],
+                    petrolMd:  [44, 92, 110],
+                    mint:      [16, 168, 122],     // ACENTO BIOSIM
+                    mintSoft:  [209, 244, 230],
+                    mintDeep:  [11, 122, 89],
+                    amber:     [232, 168, 56],
+                    amberSoft: [253, 230, 188],
+                    ink:       [30, 41, 59],
+                    inkSoft:   [71, 85, 105],
+                    muted:     [148, 163, 184],
+                    line:      [226, 232, 240],
+                    bg:        [248, 250, 252],
+                    cardBg:    [255, 255, 255],
+                    grey:      [203, 213, 225],
+                    red:       [220, 90, 90],
+                    redSoft:   [254, 226, 226],
+                    white:     [255, 255, 255]
+                };
+
+                // ===== HELPERS =====
+                const setFill = c => pdf.setFillColor(c[0], c[1], c[2]);
+                const setText = c => pdf.setTextColor(c[0], c[1], c[2]);
+                const setDraw = c => pdf.setDrawColor(c[0], c[1], c[2]);
+                const fmtInt = n => Number(n || 0).toLocaleString('es-ES');
+                const fmtCurrency = n => '€' + Number(n || 0).toLocaleString('es-ES', { maximumFractionDigits: 0 });
+                const fmtCompact = (n) => {
+                    n = Number(n || 0);
+                    if (n >= 1_000_000) return (n / 1_000_000).toFixed(2).replace('.', ',') + 'M';
+                    if (n >= 1_000)     return (n / 1_000).toFixed(1).replace('.', ',') + 'K';
+                    return n.toLocaleString('es-ES');
+                };
+                const fmtCurrencyCompact = (n) => '€' + fmtCompact(n);
+                const fmtPct = (n) => Number(n || 0).toFixed(1).replace('.', ',') + '%';
+                const drawTriangle = (cx, cy, isUp, sz = 1.5, color = COLOR.mint) => {
+                    setFill(color);
+                    if (isUp) pdf.triangle(cx - sz, cy + sz * 0.6, cx, cy - sz, cx + sz, cy + sz * 0.6, 'F');
+                    else      pdf.triangle(cx - sz, cy - sz * 0.6, cx, cy + sz, cx + sz, cy - sz * 0.6, 'F');
+                };
+                const card = (x, y, w, h, accent = null, fill = COLOR.cardBg) => {
+                    setFill(fill);
+                    pdf.roundedRect(x, y, w, h, 2, 2, 'F');
+                    setDraw(COLOR.line);
+                    pdf.setLineWidth(0.2);
+                    pdf.roundedRect(x, y, w, h, 2, 2, 'S');
+                    if (accent) {
+                        setFill(accent);
+                        pdf.rect(x, y, w, 1, 'F');
+                    }
+                };
+                const slimHeader = (chapter, title) => {
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(7.5);
+                    pdf.text(`SEGUIMIENTO DE BIOSIMILARES · ${GRAN.label.toUpperCase()}`, PAGE_W - M, 10, { align: 'right' });
+                    setText(COLOR.inkSoft);
+                    pdf.setFontSize(7.5);
+                    pdf.text(`${chapter}  ·  ${title}`, PAGE_W - M, 14, { align: 'right' });
+                };
+                const footerSlim = () => {
+                    const totalP = pdf.getNumberOfPages();
+                    for (let p = 1; p <= totalP; p++) {
+                        pdf.setPage(p);
+                        setDraw(COLOR.line);
+                        pdf.setLineWidth(0.2);
+                        pdf.line(M, PAGE_H - 12, PAGE_W - M, PAGE_H - 12);
+                        setText(COLOR.muted);
+                        pdf.setFont('helvetica', 'normal');
+                        pdf.setFontSize(7);
+                        pdf.text('Hospital Universitari i Politècnic La Fe · Servicio de Farmacia', M, PAGE_H - 8);
+                        pdf.text(`${p} / ${totalP}`, PAGE_W - M, PAGE_H - 8, { align: 'right' });
+                    }
+                };
+
+                // ===== DATOS =====
+                const biosimGlobal = calculateBiosimilarPenetration(dataToProcess);  // por años (siempre años)
+                const bioDataByPeriod = GRAN.calcBio(dataToProcess);  // según granularidad elegida
+                const totals = calculateGlobalTotals(dataToProcess);
+
+                // Lista de periodos (según granularidad)
+                const allPeriods = (() => {
+                    if (granularity === 'years') {
+                        return bioDataByPeriod.pivotMeta?.years?.map(String) || biosimGlobal.years.map(String);
+                    } else {
+                        // Para Q/M, lo extraemos de las columnas del byProduct
+                        const sample = bioDataByPeriod.byProduct || [];
+                        const periodSet = new Set();
+                        sample.forEach(row => {
+                            Object.keys(row).forEach(k => {
+                                if (k !== 'Biosimilar' && k !== 'TOTAL' && !k.includes('€') && k.endsWith(' Pac')) {
+                                    periodSet.add(k.replace(' Pac', ''));
+                                }
+                            });
+                        });
+                        return [...periodSet].sort();
+                    }
+                })();
+                const periodsForTable = allPeriods.length > GRAN.maxCols
+                    ? allPeriods.slice(-GRAN.maxCols)
+                    : allPeriods;
+                const tableTruncated = allPeriods.length > GRAN.maxCols;
+
+                // ===== KPIs HERO =====
+                // % global de penetración: pacientes con biosim / pacientes con PA biosimilarable
+                const PA_WITH_BIO = ['ADALIMUMAB','ETANERCEPT','INFLIXIMAB','TOCILIZUMAB','USTEKINUMAB','OMALIZUMAB','GOLIMUMAB'];
+                const paBioStatsGlobal = {};
+                const allPatsWithBio = new Set();   // pacientes con al menos una dispensación de biosimilar
+                const allPatsBiosimilarable = new Set(); // pacientes con PA biosimilarable
+                let costeBio = 0, costeBiosimilarable = 0;
+
+                dataToProcess.forEach(row => {
+                    if (!row['Id'] || !row['Descripción Principio Activo']) return;
+                    const pa = String(row['Descripción Principio Activo']).toUpperCase();
+                    const paKey = PA_WITH_BIO.find(p => pa.includes(p));
+                    if (!paKey) return;
+                    const coste = parseFloat(row['Coste Dispensación']) || 0;
+                    const prod = String(row['Descripción Producto Dispensado'] || '').toUpperCase();
+                    const isBio = BIOSIMILARES.some(b => prod.includes(b));
+
+                    if (!paBioStatsGlobal[paKey]) paBioStatsGlobal[paKey] = { total: new Set(), bio: new Set(), cTotal: 0, cBio: 0 };
+                    paBioStatsGlobal[paKey].total.add(row['Id']);
+                    paBioStatsGlobal[paKey].cTotal += coste;
+                    allPatsBiosimilarable.add(row['Id']);
+                    costeBiosimilarable += coste;
+                    if (isBio) {
+                        paBioStatsGlobal[paKey].bio.add(row['Id']);
+                        paBioStatsGlobal[paKey].cBio += coste;
+                        allPatsWithBio.add(row['Id']);
+                        costeBio += coste;
+                    }
+                });
+                const penetracionGlobal = allPatsBiosimilarable.size > 0
+                    ? (allPatsWithBio.size / allPatsBiosimilarable.size * 100) : 0;
+                const pctCosteBio = costeBiosimilarable > 0
+                    ? (costeBio / costeBiosimilarable * 100) : 0;
+
+                // Delta vs periodo anterior (uso de biosimGlobal por años para tener referencia clara)
+                const yearsBio = biosimGlobal.years || [];
+                const pcts = biosimGlobal.percentages || [];
+                const lastPctY = pcts.length > 0 ? pcts[pcts.length-1] : penetracionGlobal;
+                const prevPctY = pcts.length > 1 ? pcts[pcts.length-2] : null;
+                const deltaPct = prevPctY !== null ? (lastPctY - prevPctY) : null;
+                const lastYear = yearsBio.length > 0 ? yearsBio[yearsBio.length-1] : '';
+                const prevYear = yearsBio.length > 1 ? yearsBio[yearsBio.length-2] : '';
+
+                // Periodo descripción y filtros
+                let periodoTxt = 'Todos los datos';
+                if (allPeriods.length > 0) {
+                    if (granularity === 'years') {
+                        const ys = allPeriods.map(Number);
+                        const yMin = Math.min(...ys), yMax = Math.max(...ys);
+                        periodoTxt = (yMin === yMax) ? `${yMin}` : `${yMin} — ${yMax}`;
+                    } else {
+                        periodoTxt = `${GRAN.shortLabel(allPeriods[0])} — ${GRAN.shortLabel(allPeriods[allPeriods.length - 1])}`;
+                    }
+                }
+                const fecha = new Date().toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' });
+                const activeFilters = [];
+                if (filters.year) activeFilters.push(`Año ${filters.year}`);
+                if (filters.service) activeFilters.push(filters.service);
+                if (filters.pathology) activeFilters.push(filters.pathology);
+                if (filters.activeIngredient) activeFilters.push(filters.activeIngredient);
+                if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`${selectedPASet.size} PA`);
+
+                const tempDiv = document.createElement('div');
+                tempDiv.style.position = 'fixed';
+                tempDiv.style.left = '-9999px';
+                tempDiv.style.width = '1800px';
+                tempDiv.style.height = '1800px';
+                document.body.appendChild(tempDiv);
+
+                try {
+
+                // ===================================================================
+                //  PÁGINA 1 — PORTADA
+                // ===================================================================
+                const HERO_H = 75;
+                setFill(COLOR.petrol);
+                pdf.rect(0, 0, PAGE_W, HERO_H, 'F');
+
+                if (HOSPITAL_LOGO_BASE64) {
+                    try { pdf.addImage(HOSPITAL_LOGO_BASE64, 'PNG', M, 10, 24, 12); } catch (e) {}
+                }
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(9);
+                setText([200, 215, 222]);
+                pdf.text('INFORME DE SEGUIMIENTO DE BIOSIMILARES · IMID', M, 32);
+                setFill(COLOR.mint);
+                pdf.rect(M, 35, 14, 1.5, 'F');
+
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(28);
+                setText([255, 255, 255]);
+                pdf.text(`Biosimilares ${GRAN.label}`, M, 50);
+                pdf.setFontSize(20);
+                setText([200, 215, 222]);
+                pdf.text(periodoTxt, M, 60);
+
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(8);
+                setText([180, 195, 205]);
+                pdf.text(`Generado el ${fecha}`, M, 67);
+                if (activeFilters.length > 0) {
+                    const ftxt = 'Filtros: ' + activeFilters.join(' · ');
+                    pdf.text(ftxt.length > 80 ? ftxt.substring(0, 80) + '…' : ftxt, M, 70.5);
+                }
+
+                // KPIs hero
+                let y = HERO_H + 12;
+                const KPI_H = 32;
+                const kpiCount = 4;
+                const kpiGap = 4;
+                const kpiW = (W - kpiGap * (kpiCount - 1)) / kpiCount;
+                const kpis = [
+                    {
+                        label: 'Penetración global',
+                        value: fmtPct(penetracionGlobal),
+                        full: `${fmtInt(allPatsWithBio.size)} de ${fmtInt(allPatsBiosimilarable.size)} pac.`,
+                        delta: deltaPct,
+                        deltaLabel: lastYear && prevYear ? `vs ${prevYear}` : null,
+                        deltaUnit: 'pp',
+                        accent: COLOR.mint
+                    },
+                    {
+                        label: 'Pacientes con biosim.',
+                        value: fmtCompact(allPatsWithBio.size),
+                        full: fmtInt(allPatsWithBio.size),
+                        delta: null,
+                        accent: COLOR.mintDeep
+                    },
+                    {
+                        label: '% del coste',
+                        value: fmtPct(pctCosteBio),
+                        full: `${fmtCurrency(costeBio)} de ${fmtCurrency(costeBiosimilarable)}`,
+                        delta: null,
+                        accent: COLOR.amber
+                    },
+                    {
+                        label: 'Marcas biosimilares',
+                        value: String(BIOSIMILARES.length),
+                        full: `${BIOSIMILARES.length} biosimilares · 7 PA`,
+                        delta: null,
+                        accent: COLOR.petrolMd
+                    }
+                ];
+                kpis.forEach((k, i) => {
+                    const x = M + i * (kpiW + kpiGap);
+                    card(x, y, kpiW, KPI_H, k.accent);
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(7);
+                    pdf.text(k.label.toUpperCase(), x + 5, y + 7);
+                    setText(COLOR.ink);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.setFontSize(17);
+                    pdf.text(k.value, x + 5, y + 18);
+                    setText(COLOR.inkSoft);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(7);
+                    pdf.text(k.full.length > 28 ? k.full.substring(0, 27) + '…' : k.full, x + 5, y + 23);
+                    if (k.delta !== null && !isNaN(k.delta)) {
+                        const isUp = k.delta > 0;
+                        const dColor = isUp ? COLOR.mint : COLOR.red;
+                        drawTriangle(x + 5, y + 28, isUp, 1.3, dColor);
+                        setText(dColor);
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.setFontSize(7.5);
+                        pdf.text(`${Math.abs(k.delta).toFixed(1).replace('.', ',')}${k.deltaUnit || ''}`, x + 8, y + 28.5);
+                        if (k.deltaLabel) {
+                            setText(COLOR.muted);
+                            pdf.setFont('helvetica', 'normal');
+                            pdf.setFontSize(7);
+                            pdf.text(k.deltaLabel, x + 20, y + 28.5);
+                        }
+                    }
+                });
+
+                y += KPI_H + 10;
+
+                // Bloque resumen ejecutivo
+                setFill(COLOR.bg);
+                pdf.roundedRect(M, y, W, 50, 2, 2, 'F');
+                setFill(COLOR.mint);
+                pdf.rect(M, y, 1.5, 50, 'F');
+                setText(COLOR.ink);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(10);
+                pdf.text('Resumen ejecutivo', M + 6, y + 8);
+                setText(COLOR.inkSoft);
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(8.5);
+
+                // Construir bullets de insights
+                const top3 = Object.keys(paBioStatsGlobal)
+                    .map(pa => ({
+                        name: pa,
+                        bio: paBioStatsGlobal[pa].bio.size,
+                        total: paBioStatsGlobal[pa].total.size,
+                        pct: paBioStatsGlobal[pa].total.size > 0 ? (paBioStatsGlobal[pa].bio.size / paBioStatsGlobal[pa].total.size * 100) : 0
+                    }))
+                    .filter(x => x.total > 0)
+                    .sort((a, b) => b.pct - a.pct);
+                const insights = [];
+                insights.push(`Se ha analizado un total de ${fmtInt(allPatsBiosimilarable.size)} pacientes con principio activo biosimilarable, de los cuales ${fmtInt(allPatsWithBio.size)} (${fmtPct(penetracionGlobal)}) reciben un biosimilar.`);
+                if (top3.length > 0) {
+                    const best = top3[0];
+                    insights.push(`Principio activo con mayor penetración: ${best.name.charAt(0)+best.name.slice(1).toLowerCase()} (${fmtPct(best.pct)}).`);
+                }
+                if (top3.length > 1) {
+                    const worst = top3[top3.length-1];
+                    insights.push(`Principio activo con mayor margen de mejora: ${worst.name.charAt(0)+worst.name.slice(1).toLowerCase()} (${fmtPct(worst.pct)}).`);
+                }
+                if (deltaPct !== null) {
+                    const sign = deltaPct >= 0 ? 'avanzado' : 'retrocedido';
+                    insights.push(`Frente al periodo anterior, la penetración global ha ${sign} ${Math.abs(deltaPct).toFixed(1).replace('.', ',')} puntos porcentuales.`);
+                }
+
+                let iy = y + 14;
+                insights.forEach(ins => {
+                    setFill(COLOR.mint);
+                    pdf.circle(M + 8, iy - 1, 0.8, 'F');
+                    setText(COLOR.inkSoft);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(8.5);
+                    // wrap
+                    const lines = pdf.splitTextToSize(ins, W - 16);
+                    lines.forEach((ln, k) => { pdf.text(ln, M + 12, iy + k * 4); });
+                    iy += lines.length * 4 + 2;
+                });
+
+                // ===================================================================
+                //  PÁGINA 2 — EVOLUCIÓN DE LA PENETRACIÓN
+                // ===================================================================
+                pdf.addPage();
+                slimHeader('02', 'Evolución de la penetración');
+                y = 28;
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(44);
+                setText([235, 238, 248]);
+                pdf.text('02', M, y + 8);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(15);
+                setText(COLOR.ink);
+                pdf.text('Evolución temporal', M + 28, y);
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(8.5);
+                setText(COLOR.muted);
+                pdf.text(`Penetración de biosimilares por ${GRAN.periodPlural} sobre principios activos con alternativa disponible.`, M + 28, y + 5);
+                y += 22;
+
+                // Gráfico de evolución grande (barras)
+                const canvasEv = document.createElement('canvas');
+                canvasEv.width = 1400; canvasEv.height = 700;
+                tempDiv.appendChild(canvasEv);
+
+                // Datos: usamos biosimGlobal (que es anual) o reagrupamos para Q/M
+                let evLabels, evValues;
+                if (granularity === 'years') {
+                    evLabels = biosimGlobal.years.map(String);
+                    evValues = biosimGlobal.percentages;
+                } else {
+                    // Calcular penetración por periodo
+                    const periodPatStats = {};
+                    dataToProcess.forEach(row => {
+                        if (!row['Fecha Dispensación'] || !row['Id'] || !row['Descripción Principio Activo']) return;
+                        const pa = String(row['Descripción Principio Activo']).toUpperCase();
+                        if (!PA_WITH_BIO.some(p => pa.includes(p))) return;
+                        const d = row['Fecha Dispensación'];
+                        let period;
+                        if (granularity === 'quarters') {
+                            const q = Math.floor(d.getMonth()/3) + 1;
+                            period = `${d.getFullYear()}-Q${q}`;
+                        } else {
+                            period = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+                        }
+                        if (!periodPatStats[period]) periodPatStats[period] = { total: new Set(), bio: new Set() };
+                        periodPatStats[period].total.add(row['Id']);
+                        const prod = String(row['Descripción Producto Dispensado'] || '').toUpperCase();
+                        if (BIOSIMILARES.some(b => prod.includes(b))) {
+                            periodPatStats[period].bio.add(row['Id']);
+                        }
+                    });
+                    evLabels = Object.keys(periodPatStats).sort().map(GRAN.shortLabel);
+                    evValues = Object.keys(periodPatStats).sort().map(p => {
+                        const s = periodPatStats[p];
+                        return s.total.size > 0 ? (s.bio.size / s.total.size * 100) : 0;
+                    });
+                }
+
+                const chartEv = new Chart(canvasEv, {
+                    type: 'bar',
+                    data: {
+                        labels: evLabels,
+                        datasets: [{
+                            data: evValues,
+                            backgroundColor: 'rgba(16, 168, 122, 0.92)',
+                            borderRadius: 8,
+                            borderSkipped: false
+                        }]
+                    },
+                    options: {
+                        responsive: false, animation: false,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: { enabled: false },
+                            datalabels: false
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true, max: 100,
+                                grid: { color: 'rgba(226,232,240,0.7)', drawBorder: false },
+                                ticks: { color: '#94a3b8', font: { size: 22 }, callback: v => v + '%' }
+                            },
+                            x: {
+                                grid: { display: false },
+                                ticks: { color: '#475569', font: { size: 20, weight: 'bold' } }
+                            }
+                        }
+                    }
+                });
+                await new Promise(r => setTimeout(r, 350));
+                pdf.addImage(canvasEv.toDataURL('image/png', 1.0), 'PNG', M, y, W, 75);
+                chartEv.destroy();
+                y += 80;
+
+                // Tabla resumen del periodo (penetración por periodo)
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(10);
+                setText(COLOR.ink);
+                pdf.text(`Penetración por ${GRAN.periodPlural}`, M, y);
+                if (tableTruncated) {
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(7.5);
+                    pdf.text(`(mostrando últimos ${GRAN.maxCols} ${GRAN.periodPlural})`, PAGE_W - M, y, { align: 'right' });
+                }
+                y += 5;
+                // Cabecera tabla
+                const colPerW = (W - 30) / Math.max(1, periodsForTable.length);
+                setFill(COLOR.petrolMd);
+                pdf.rect(M, y, W, 6, 'F');
+                setText(COLOR.white);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(7.5);
+                pdf.text('Métrica', M + 2, y + 4);
+                periodsForTable.forEach((p, i) => {
+                    pdf.text(GRAN.shortLabel(p), M + 30 + i * colPerW + colPerW/2, y + 4, { align: 'center' });
+                });
+                y += 6;
+
+                // Filas
+                const rowMetrics = [
+                    {
+                        label: 'Pacientes biosim.',
+                        valFn: (period) => {
+                            const cnt = new Set();
+                            dataToProcess.forEach(row => {
+                                if (!row['Fecha Dispensación'] || !row['Id']) return;
+                                const d = row['Fecha Dispensación'];
+                                let p;
+                                if (granularity === 'years') p = String(d.getFullYear());
+                                else if (granularity === 'quarters') p = `${d.getFullYear()}-Q${Math.floor(d.getMonth()/3)+1}`;
+                                else p = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+                                if (p !== period) return;
+                                const prod = String(row['Descripción Producto Dispensado'] || '').toUpperCase();
+                                if (BIOSIMILARES.some(b => prod.includes(b))) cnt.add(row['Id']);
+                            });
+                            return fmtInt(cnt.size);
+                        }
+                    },
+                    {
+                        label: 'Pac. PA biosim.',
+                        valFn: (period) => {
+                            const cnt = new Set();
+                            dataToProcess.forEach(row => {
+                                if (!row['Fecha Dispensación'] || !row['Id'] || !row['Descripción Principio Activo']) return;
+                                const pa = String(row['Descripción Principio Activo']).toUpperCase();
+                                if (!PA_WITH_BIO.some(p => pa.includes(p))) return;
+                                const d = row['Fecha Dispensación'];
+                                let p;
+                                if (granularity === 'years') p = String(d.getFullYear());
+                                else if (granularity === 'quarters') p = `${d.getFullYear()}-Q${Math.floor(d.getMonth()/3)+1}`;
+                                else p = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+                                if (p !== period) return;
+                                cnt.add(row['Id']);
+                            });
+                            return fmtInt(cnt.size);
+                        }
+                    },
+                    {
+                        label: '% Penetración',
+                        valFn: (period) => {
+                            const all = new Set(), bio = new Set();
+                            dataToProcess.forEach(row => {
+                                if (!row['Fecha Dispensación'] || !row['Id'] || !row['Descripción Principio Activo']) return;
+                                const pa = String(row['Descripción Principio Activo']).toUpperCase();
+                                if (!PA_WITH_BIO.some(p => pa.includes(p))) return;
+                                const d = row['Fecha Dispensación'];
+                                let p;
+                                if (granularity === 'years') p = String(d.getFullYear());
+                                else if (granularity === 'quarters') p = `${d.getFullYear()}-Q${Math.floor(d.getMonth()/3)+1}`;
+                                else p = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+                                if (p !== period) return;
+                                all.add(row['Id']);
+                                const prod = String(row['Descripción Producto Dispensado'] || '').toUpperCase();
+                                if (BIOSIMILARES.some(b => prod.includes(b))) bio.add(row['Id']);
+                            });
+                            return all.size > 0 ? fmtPct(bio.size / all.size * 100) : '–';
+                        },
+                        bold: true
+                    }
+                ];
+
+                rowMetrics.forEach((rm, idx) => {
+                    setFill(idx % 2 === 0 ? COLOR.cardBg : COLOR.bg);
+                    pdf.rect(M, y, W, 6, 'F');
+                    setText(COLOR.inkSoft);
+                    pdf.setFont('helvetica', rm.bold ? 'bold' : 'normal');
+                    pdf.setFontSize(7.5);
+                    pdf.text(rm.label, M + 2, y + 4);
+                    periodsForTable.forEach((p, i) => {
+                        const v = rm.valFn(p);
+                        setText(rm.bold ? COLOR.mintDeep : COLOR.ink);
+                        pdf.text(v, M + 30 + i * colPerW + colPerW/2, y + 4, { align: 'center' });
+                    });
+                    y += 6;
+                });
+
+                // ===================================================================
+                //  PÁGINA 3 — ANÁLISIS POR PRINCIPIO ACTIVO
+                // ===================================================================
+                pdf.addPage();
+                slimHeader('03', 'Análisis por principio activo');
+                y = 28;
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(44);
+                setText([235, 238, 248]);
+                pdf.text('03', M, y + 8);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(15);
+                setText(COLOR.ink);
+                pdf.text('Análisis por principio activo', M + 28, y);
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(8.5);
+                setText(COLOR.muted);
+                pdf.text('Penetración del biosimilar sobre el total de pacientes con cada principio activo biosimilarable.', M + 28, y + 5);
+                y += 22;
+
+                // Tarjetas por PA con biosim
+                const paStatsArr = Object.keys(paBioStatsGlobal).map(pa => ({
+                    name: pa,
+                    bio: paBioStatsGlobal[pa].bio.size,
+                    total: paBioStatsGlobal[pa].total.size,
+                    cBio: paBioStatsGlobal[pa].cBio,
+                    cTotal: paBioStatsGlobal[pa].cTotal,
+                    pct: paBioStatsGlobal[pa].total.size > 0 ? (paBioStatsGlobal[pa].bio.size / paBioStatsGlobal[pa].total.size * 100) : 0,
+                    pctCost: paBioStatsGlobal[pa].cTotal > 0 ? (paBioStatsGlobal[pa].cBio / paBioStatsGlobal[pa].cTotal * 100) : 0
+                })).sort((a, b) => b.total - a.total);
+
+                if (paStatsArr.length === 0) {
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'italic');
+                    pdf.setFontSize(10);
+                    pdf.text('Sin datos de principios activos biosimilarables en el periodo seleccionado.', M, y + 10);
+                } else {
+                    // Layout 2 columnas
+                    const cardW = (W - 6) / 2;
+                    const cardH = 36;
+                    paStatsArr.forEach((pa, i) => {
+                        const col = i % 2;
+                        const row = Math.floor(i / 2);
+                        const cx = M + col * (cardW + 6);
+                        const cy = y + row * (cardH + 5);
+                        // Salto de página si nos vamos del límite
+                        if (cy + cardH > PAGE_H - 20) return; // No deberíamos llegar aquí con 7 PA
+
+                        card(cx, cy, cardW, cardH, COLOR.mint);
+                        // Nombre del PA
+                        const niceName = pa.name.charAt(0) + pa.name.slice(1).toLowerCase();
+                        setText(COLOR.ink);
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.setFontSize(11);
+                        pdf.text(niceName, cx + 6, cy + 8);
+                        // % grande
+                        setText(COLOR.mintDeep);
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.setFontSize(20);
+                        pdf.text(fmtPct(pa.pct), cx + cardW - 6, cy + 11, { align: 'right' });
+                        // Etiqueta debajo del %
+                        setText(COLOR.muted);
+                        pdf.setFont('helvetica', 'normal');
+                        pdf.setFontSize(6.5);
+                        pdf.text('% pacientes con biosim.', cx + cardW - 6, cy + 15, { align: 'right' });
+
+                        // Cifras secundarias
+                        setText(COLOR.inkSoft);
+                        pdf.setFont('helvetica', 'normal');
+                        pdf.setFontSize(7.5);
+                        pdf.text(`${fmtInt(pa.bio)} / ${fmtInt(pa.total)} pacientes`, cx + 6, cy + 14);
+                        pdf.text(`Coste biosim.: ${fmtCurrency(pa.cBio)} (${fmtPct(pa.pctCost)})`, cx + 6, cy + 18);
+
+                        // Barra apilada
+                        const barX = cx + 6;
+                        const barY = cy + 22;
+                        const barW = cardW - 12;
+                        const barH = 4;
+                        // fondo gris (total = todo el ancho)
+                        setFill(COLOR.grey);
+                        pdf.roundedRect(barX, barY, barW, barH, 1, 1, 'F');
+                        // biosimilar (mint, proporcional al pct)
+                        setFill(COLOR.mint);
+                        pdf.roundedRect(barX, barY, barW * (pa.pct / 100), barH, 1, 1, 'F');
+
+                        // Leyenda mini
+                        setText(COLOR.muted);
+                        pdf.setFontSize(6.5);
+                        pdf.text(`${fmtInt(pa.bio)} biosim.`, barX, barY + 8);
+                        pdf.text(`${fmtInt(pa.total - pa.bio)} de marca`, barX + barW, barY + 8, { align: 'right' });
+                    });
+                    y += Math.ceil(paStatsArr.length / 2) * (cardH + 5) + 4;
+                }
+
+                // ===================================================================
+                //  PÁGINA 4 — DETALLE POR MARCA BIOSIMILAR
+                // ===================================================================
+                pdf.addPage();
+                slimHeader('04', 'Detalle por marca biosimilar');
+                y = 28;
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(44);
+                setText([235, 238, 248]);
+                pdf.text('04', M, y + 8);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(15);
+                setText(COLOR.ink);
+                pdf.text('Detalle por marca biosimilar', M + 28, y);
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(8.5);
+                setText(COLOR.muted);
+                pdf.text('Datos acumulados de cada marca biosimilar dispensada en el periodo.', M + 28, y + 5);
+                y += 22;
+
+                // Reagrupar bioDataByPeriod.byProduct por canónico de biosimilar
+                // (cada producto se asigna al BIOSIMILAR cuya marca aparezca en su descripción)
+                const brandStats = {};
+                dataToProcess.forEach(row => {
+                    if (!row['Id'] || !row['Descripción Producto Dispensado']) return;
+                    const prod = String(row['Descripción Producto Dispensado']).toUpperCase();
+                    const brand = BIOSIMILARES.find(b => prod.includes(b));
+                    if (!brand) return;
+                    if (!brandStats[brand]) brandStats[brand] = {
+                        pats: new Set(),
+                        dispensaciones: 0,
+                        unidades: 0,
+                        coste: 0,
+                        pa: BIOSIMILAR_PA_MAP[brand] || '—'
+                    };
+                    brandStats[brand].pats.add(row['Id']);
+                    brandStats[brand].dispensaciones++;
+                    brandStats[brand].unidades += parseInt(row['Cantidad']) || 0;
+                    brandStats[brand].coste += parseFloat(row['Coste Dispensación']) || 0;
+                });
+                const brandArr = Object.keys(brandStats).map(b => ({
+                    brand: b,
+                    ...brandStats[b],
+                    patsCount: brandStats[b].pats.size
+                })).sort((a, b) => b.patsCount - a.patsCount);
+
+                if (brandArr.length === 0) {
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'italic');
+                    pdf.setFontSize(10);
+                    pdf.text('Sin dispensaciones de biosimilares en el periodo seleccionado.', M, y + 10);
+                } else {
+                    // Tabla
+                    const cols = [
+                        { label: 'Marca',          w: 30, align: 'left'  },
+                        { label: 'Principio activo', w: 35, align: 'left' },
+                        { label: 'Pacientes',      w: 22, align: 'right' },
+                        { label: 'Dispensaciones', w: 28, align: 'right' },
+                        { label: 'Unidades',       w: 22, align: 'right' },
+                        { label: 'Coste',          w: 28, align: 'right' },
+                        { label: '% Coste',        w: 15, align: 'right' }
+                    ];
+                    const totalColW = cols.reduce((s, c) => s + c.w, 0);
+                    const scaleX = W / totalColW;
+                    let cursor = M;
+                    const colX = cols.map(c => {
+                        const x = cursor;
+                        cursor += c.w * scaleX;
+                        return { x, w: c.w * scaleX, align: c.align, label: c.label };
+                    });
+
+                    // Cabecera
+                    setFill(COLOR.petrolMd);
+                    pdf.rect(M, y, W, 7, 'F');
+                    setText(COLOR.white);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.setFontSize(8);
+                    colX.forEach((c, i) => {
+                        const tx = cols[i].align === 'right' ? c.x + c.w - 2 : c.x + 2;
+                        pdf.text(cols[i].label, tx, y + 4.5, { align: cols[i].align });
+                    });
+                    y += 7;
+
+                    const totalCosteTodos = brandArr.reduce((s, b) => s + b.coste, 0);
+
+                    brandArr.forEach((b, idx) => {
+                        if (y + 6 > PAGE_H - 20) return; // protección por si hubiera muchas
+                        setFill(idx % 2 === 0 ? COLOR.cardBg : COLOR.bg);
+                        pdf.rect(M, y, W, 6, 'F');
+                        setText(COLOR.ink);
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.setFontSize(8);
+                        const niceName = b.brand.charAt(0) + b.brand.slice(1).toLowerCase();
+                        pdf.text(niceName, colX[0].x + 2, y + 4);
+
+                        setText(COLOR.inkSoft);
+                        pdf.setFont('helvetica', 'normal');
+                        pdf.setFontSize(7.5);
+                        pdf.text(b.pa, colX[1].x + 2, y + 4);
+                        pdf.text(fmtInt(b.patsCount),       colX[2].x + colX[2].w - 2, y + 4, { align: 'right' });
+                        pdf.text(fmtInt(b.dispensaciones), colX[3].x + colX[3].w - 2, y + 4, { align: 'right' });
+                        pdf.text(fmtInt(b.unidades),        colX[4].x + colX[4].w - 2, y + 4, { align: 'right' });
+                        pdf.text(fmtCurrency(b.coste),     colX[5].x + colX[5].w - 2, y + 4, { align: 'right' });
+                        const pctC = totalCosteTodos > 0 ? (b.coste / totalCosteTodos * 100) : 0;
+                        setText(COLOR.mintDeep);
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.text(fmtPct(pctC),              colX[6].x + colX[6].w - 2, y + 4, { align: 'right' });
+                        y += 6;
+                    });
+
+                    // Fila TOTAL
+                    setFill(COLOR.mintSoft);
+                    pdf.rect(M, y, W, 7, 'F');
+                    setText(COLOR.mintDeep);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.setFontSize(8);
+                    pdf.text('TOTAL', colX[0].x + 2, y + 4.5);
+                    pdf.text('—', colX[1].x + 2, y + 4.5);
+                    const totPats = brandArr.reduce((s, b) => s + b.patsCount, 0); // nota: puede haber duplicados entre marcas si un paciente recibe varios biosim
+                    const totDisp = brandArr.reduce((s, b) => s + b.dispensaciones, 0);
+                    const totUni  = brandArr.reduce((s, b) => s + b.unidades, 0);
+                    pdf.text(fmtInt(totPats), colX[2].x + colX[2].w - 2, y + 4.5, { align: 'right' });
+                    pdf.text(fmtInt(totDisp), colX[3].x + colX[3].w - 2, y + 4.5, { align: 'right' });
+                    pdf.text(fmtInt(totUni),  colX[4].x + colX[4].w - 2, y + 4.5, { align: 'right' });
+                    pdf.text(fmtCurrency(totalCosteTodos), colX[5].x + colX[5].w - 2, y + 4.5, { align: 'right' });
+                    pdf.text('100,0%', colX[6].x + colX[6].w - 2, y + 4.5, { align: 'right' });
+                    y += 7;
+
+                    // Nota a pie
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'italic');
+                    pdf.setFontSize(7);
+                    pdf.text('* La columna "Pacientes" cuenta IDs únicos por marca; un mismo paciente puede aparecer en varias marcas si ha recibido más de un biosimilar.', M, y + 4);
+                }
+
+                } catch (error) {
+                    console.error('❌ Error generando informe biosimilares:', error);
+                    throw error;
+                } finally {
+                    document.body.removeChild(tempDiv);
+                }
+
+                footerSlim();
+                pdf.save(`Informe_Biosimilares_${GRAN.label}_${new Date().toISOString().split('T')[0]}.pdf`);
+                console.log(`✅ Biosimilares ${GRAN.label} completo generado`);
+            };
+
+            // ============================================================================
+            // INFORME COMPACTO DE BIOSIMILARES — 1 hoja A4 apaisada
+            // Layout dashboard: KPIs + 2×2 scorecard (hero stat, evolución, top PA, top marcas).
+            // ============================================================================
+            const generateReportBiosimilaresCompacto = async (dataToProcess, granularity) => {
+                console.log(`📄 Iniciando Biosimilares Compacto (${granularity})…`);
+
+                const GRAN = (() => {
+                    if (granularity === 'quarters') {
+                        return {
+                            label: 'Trimestral',
+                            shortLabel: (p) => { const m = p.match(/(\d{4})-Q(\d)/); return m ? `${m[1].substring(2)}·T${m[2]}` : p; },
+                            periodPlural: 'trimestre'
+                        };
+                    } else if (granularity === 'months') {
+                        return {
+                            label: 'Mensual',
+                            shortLabel: (p) => { const m = p.match(/(\d{4})-(\d{2})/); if (!m) return p;
+                                const meses=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+                                return `${meses[parseInt(m[2],10)-1]} ${m[1].substring(2)}`; },
+                            periodPlural: 'mes'
+                        };
+                    } else {
+                        return { label: 'Anual', shortLabel: (p)=>String(p), periodPlural: 'año' };
+                    }
+                })();
+
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('l', 'mm', 'a4');   // horizontal
+                const PAGE_W = 297, PAGE_H = 210;
+                const M = 12;
+                const W = PAGE_W - M * 2;
+
+                const COLOR = {
+                    petrol:    [27, 67, 84],
+                    mint:      [16, 168, 122],
+                    mintSoft:  [209, 244, 230],
+                    mintDeep:  [11, 122, 89],
+                    amber:     [232, 168, 56],
+                    ink:       [30, 41, 59],
+                    inkSoft:   [71, 85, 105],
+                    muted:     [148, 163, 184],
+                    line:      [226, 232, 240],
+                    bg:        [248, 250, 252],
+                    cardBg:    [255, 255, 255],
+                    grey:      [203, 213, 225],
+                    red:       [220, 90, 90],
+                    white:     [255, 255, 255]
+                };
+                const setFill = c => pdf.setFillColor(c[0], c[1], c[2]);
+                const setText = c => pdf.setTextColor(c[0], c[1], c[2]);
+                const setDraw = c => pdf.setDrawColor(c[0], c[1], c[2]);
+                const fmtInt = n => Number(n || 0).toLocaleString('es-ES');
+                const fmtCurrency = n => '€' + Number(n || 0).toLocaleString('es-ES', { maximumFractionDigits: 0 });
+                const fmtCompact = (n) => {
+                    n = Number(n || 0);
+                    if (n >= 1_000_000) return (n / 1_000_000).toFixed(2).replace('.', ',') + 'M';
+                    if (n >= 1_000)     return (n / 1_000).toFixed(1).replace('.', ',') + 'K';
+                    return n.toLocaleString('es-ES');
+                };
+                const fmtPct = (n) => Number(n || 0).toFixed(1).replace('.', ',') + '%';
+                const card = (x, y, w, h, accent = null, fill = COLOR.cardBg) => {
+                    setFill(fill);
+                    pdf.roundedRect(x, y, w, h, 2, 2, 'F');
+                    setDraw(COLOR.line);
+                    pdf.setLineWidth(0.2);
+                    pdf.roundedRect(x, y, w, h, 2, 2, 'S');
+                    if (accent) { setFill(accent); pdf.rect(x, y, w, 1, 'F'); }
+                };
+
+                // ===== DATOS =====
+                const PA_WITH_BIO = ['ADALIMUMAB','ETANERCEPT','INFLIXIMAB','TOCILIZUMAB','USTEKINUMAB','OMALIZUMAB','GOLIMUMAB'];
+                const paStats = {};
+                const allBio = new Set(), allBiosable = new Set();
+                let costeBio = 0, costeBiosable = 0;
+                const brandStats = {};
+                const periodStats = {};   // para evolución
+                dataToProcess.forEach(row => {
+                    if (!row['Id'] || !row['Descripción Producto Dispensado']) return;
+                    const prod = String(row['Descripción Producto Dispensado']).toUpperCase();
+                    const isBio = BIOSIMILARES.some(b => prod.includes(b));
+                    const brand = BIOSIMILARES.find(b => prod.includes(b));
+                    if (brand) {
+                        if (!brandStats[brand]) brandStats[brand] = { pats: new Set(), coste: 0 };
+                        brandStats[brand].pats.add(row['Id']);
+                        brandStats[brand].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    }
+                    if (!row['Descripción Principio Activo']) return;
+                    const pa = String(row['Descripción Principio Activo']).toUpperCase();
+                    const paKey = PA_WITH_BIO.find(p => pa.includes(p));
+                    if (!paKey) return;
+                    const coste = parseFloat(row['Coste Dispensación']) || 0;
+                    if (!paStats[paKey]) paStats[paKey] = { bio: new Set(), total: new Set() };
+                    paStats[paKey].total.add(row['Id']);
+                    allBiosable.add(row['Id']);
+                    costeBiosable += coste;
+                    if (isBio) {
+                        paStats[paKey].bio.add(row['Id']);
+                        allBio.add(row['Id']);
+                        costeBio += coste;
+                    }
+                    // periodo
+                    if (row['Fecha Dispensación']) {
+                        const d = row['Fecha Dispensación'];
+                        let p;
+                        if (granularity === 'years') p = String(d.getFullYear());
+                        else if (granularity === 'quarters') p = `${d.getFullYear()}-Q${Math.floor(d.getMonth()/3)+1}`;
+                        else p = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+                        if (!periodStats[p]) periodStats[p] = { bio: new Set(), total: new Set() };
+                        periodStats[p].total.add(row['Id']);
+                        if (isBio) periodStats[p].bio.add(row['Id']);
+                    }
+                });
+                const penetracion = allBiosable.size > 0 ? (allBio.size / allBiosable.size * 100) : 0;
+                const pctCoste = costeBiosable > 0 ? (costeBio / costeBiosable * 100) : 0;
+
+                const periods = Object.keys(periodStats).sort();
+                const pcts = periods.map(p => periodStats[p].total.size > 0 ? (periodStats[p].bio.size / periodStats[p].total.size * 100) : 0);
+                const lastPct = pcts.length > 0 ? pcts[pcts.length-1] : penetracion;
+                const prevPct = pcts.length > 1 ? pcts[pcts.length-2] : null;
+                const deltaPct = prevPct !== null ? (lastPct - prevPct) : null;
+
+                const paArr = Object.keys(paStats).map(pa => ({
+                    name: pa,
+                    bio: paStats[pa].bio.size,
+                    total: paStats[pa].total.size,
+                    pct: paStats[pa].total.size > 0 ? (paStats[pa].bio.size / paStats[pa].total.size * 100) : 0
+                })).filter(x => x.total > 0).sort((a, b) => b.total - a.total);
+
+                const brandArr = Object.keys(brandStats).map(b => ({
+                    brand: b,
+                    pats: brandStats[b].pats.size,
+                    coste: brandStats[b].coste,
+                    pa: BIOSIMILAR_PA_MAP[b] || '—'
+                })).sort((a, b) => b.pats - a.pats).slice(0, 8);
+
+                let periodoTxt = 'Todos los datos';
+                if (periods.length > 0) {
+                    if (granularity === 'years') {
+                        const ys = periods.map(Number);
+                        periodoTxt = ys.length === 1 ? `${ys[0]}` : `${Math.min(...ys)} — ${Math.max(...ys)}`;
+                    } else {
+                        periodoTxt = `${GRAN.shortLabel(periods[0])} — ${GRAN.shortLabel(periods[periods.length-1])}`;
+                    }
+                }
+                const fecha = new Date().toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' });
+                const activeFilters = [];
+                if (filters.year) activeFilters.push(`Año ${filters.year}`);
+                if (filters.service) activeFilters.push(filters.service);
+                if (filters.pathology) activeFilters.push(filters.pathology);
+                if (filters.activeIngredient) activeFilters.push(filters.activeIngredient);
+
+                const tempDiv = document.createElement('div');
+                tempDiv.style.position = 'fixed';
+                tempDiv.style.left = '-9999px';
+                tempDiv.style.width = '1800px';
+                tempDiv.style.height = '1800px';
+                document.body.appendChild(tempDiv);
+
+                try {
+
+                // ===== HEADER (banda azul superior) =====
+                const HEAD_H = 22;
+                setFill(COLOR.petrol);
+                pdf.rect(0, 0, PAGE_W, HEAD_H, 'F');
+                if (HOSPITAL_LOGO_BASE64) {
+                    try { pdf.addImage(HOSPITAL_LOGO_BASE64, 'PNG', M, 5, 20, 10); } catch (e) {}
+                }
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(15);
+                setText(COLOR.white);
+                pdf.text(`Seguimiento de biosimilares · ${GRAN.label}`, M + 26, 12);
+                setFill(COLOR.mint);
+                pdf.rect(M + 26, 14, 12, 1.2, 'F');
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(8.5);
+                setText([200, 215, 222]);
+                pdf.text(`Periodo: ${periodoTxt}  ·  Generado: ${fecha}`, M + 26, 19);
+                if (activeFilters.length > 0) {
+                    pdf.setFontSize(7);
+                    pdf.text('Filtros: ' + activeFilters.join(' · '), PAGE_W - M, 13, { align: 'right' });
+                }
+
+                // ===== KPIs hero (4 tarjetas) =====
+                let y = HEAD_H + 5;
+                const KPI_H = 22;
+                const kpiGap = 4;
+                const kpiW = (W - kpiGap * 3) / 4;
+                const kpisCompact = [
+                    { label: 'Penetración global',     value: fmtPct(penetracion),         sub: `${fmtInt(allBio.size)} de ${fmtInt(allBiosable.size)} pac.`, accent: COLOR.mint, delta: deltaPct, deltaUnit: 'pp' },
+                    { label: 'Pacientes con biosim.', value: fmtCompact(allBio.size),     sub: fmtInt(allBio.size),                                            accent: COLOR.mintDeep },
+                    { label: '% del coste',            value: fmtPct(pctCoste),            sub: `${fmtCurrency(costeBio)}`,                                    accent: COLOR.amber },
+                    { label: 'Marcas activas',         value: String(brandArr.length),     sub: `${brandArr.length} de ${BIOSIMILARES.length} biosim.`,        accent: COLOR.petrol }
+                ];
+                kpisCompact.forEach((k, i) => {
+                    const x = M + i * (kpiW + kpiGap);
+                    card(x, y, kpiW, KPI_H, k.accent);
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(7);
+                    pdf.text(k.label.toUpperCase(), x + 4, y + 6);
+                    setText(COLOR.ink);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.setFontSize(15);
+                    pdf.text(k.value, x + 4, y + 14);
+                    setText(COLOR.inkSoft);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(6.5);
+                    pdf.text(k.sub.length > 32 ? k.sub.substring(0, 31) + '…' : k.sub, x + 4, y + 19);
+                    if (k.delta !== null && !isNaN(k.delta)) {
+                        const isUp = k.delta > 0;
+                        const dColor = isUp ? COLOR.mint : COLOR.red;
+                        const dTxt = `${Math.abs(k.delta).toFixed(1).replace('.', ',')}${k.deltaUnit || ''}`;
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.setFontSize(7);
+                        const dTxtW = pdf.getTextWidth(dTxt);
+                        // Triángulo + espacio + texto, todo alineado a la derecha del KPI
+                        const tx = x + kpiW - 4;          // derecha del texto
+                        const ty = y + 19;
+                        const triRight = tx - dTxtW - 2;   // borde derecho del triángulo
+                        const triLeft = triRight - 4;
+                        setFill(dColor);
+                        if (isUp) pdf.triangle(triLeft, ty, triLeft + 2, ty - 2.4, triRight, ty, 'F');
+                        else      pdf.triangle(triLeft, ty - 2.4, triLeft + 2, ty, triRight, ty - 2.4, 'F');
+                        setText(dColor);
+                        pdf.text(dTxt, tx, ty, { align: 'right' });
+                    }
+                });
+                y += KPI_H + 5;
+
+                // ===== SCORECARD 2×2 =====
+                const blockGap = 4;
+                const blockW = (W - blockGap) / 2;
+                const blockH = (PAGE_H - y - 14) / 2 - blockGap / 2;
+
+                // Helper: cabecera de bloque
+                const blockHeader = (x, by, w, title, subtitle, accent = COLOR.mint) => {
+                    setText(COLOR.ink);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.setFontSize(9.5);
+                    pdf.text(title, x + 4, by + 5);
+                    setFill(accent);
+                    pdf.rect(x + 4, by + 6, 10, 1, 'F');
+                    if (subtitle) {
+                        setText(COLOR.muted);
+                        pdf.setFont('helvetica', 'normal');
+                        pdf.setFontSize(7);
+                        pdf.text(subtitle, x + 4, by + 10);
+                    }
+                };
+
+                // -------- BLOQUE A (arriba-izq): Hero stat con penetración global --------
+                const aX = M, aY = y;
+                card(aX, aY, blockW, blockH);
+                blockHeader(aX, aY, blockW, 'Penetración global', 'Pacientes con biosimilar sobre PA biosimilarables');
+                // Número grande
+                const heroY = aY + blockH/2 + 5;
+                setText(COLOR.mint);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(56);
+                const bigTxt = Number(penetracion).toFixed(1).replace('.', ',');
+                pdf.text(bigTxt, aX + 8, heroY);
+                const bigW = pdf.getTextWidth(bigTxt);
+                pdf.setFontSize(20);
+                setText(COLOR.mintDeep);
+                pdf.text('%', aX + 8 + bigW + 2, heroY);
+
+                // Delta
+                if (deltaPct !== null) {
+                    const isUp = deltaPct > 0;
+                    const dColor = isUp ? COLOR.mint : COLOR.red;
+                    setFill(dColor);
+                    const triX = aX + 8;
+                    const triY = heroY + 6;
+                    if (isUp) pdf.triangle(triX, triY, triX + 3, triY - 3.5, triX + 6, triY, 'F');
+                    else      pdf.triangle(triX, triY - 3.5, triX + 3, triY, triX + 6, triY - 3.5, 'F');
+                    setText(dColor);
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.setFontSize(11);
+                    pdf.text(`${Math.abs(deltaPct).toFixed(1).replace('.', ',')} pp`, aX + 16, heroY + 8);
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(8);
+                    pdf.text(`vs ${GRAN.periodPlural} anterior`, aX + 38, heroY + 8);
+                }
+                // Cifras debajo
+                setText(COLOR.inkSoft);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(10);
+                pdf.text(`${fmtInt(allBio.size)}`, aX + 8, heroY + 18);
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(8);
+                pdf.text(' pacientes con biosimilar', aX + 8 + pdf.getTextWidth(`${fmtInt(allBio.size)}`) + 1, heroY + 18);
+                pdf.setFont('helvetica', 'bold');
+                pdf.setFontSize(10);
+                pdf.text(`${fmtInt(allBiosable.size)}`, aX + 8, heroY + 24);
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(8);
+                pdf.text(' pacientes con PA biosimilarable', aX + 8 + pdf.getTextWidth(`${fmtInt(allBiosable.size)}`) + 1, heroY + 24);
+
+                // -------- BLOQUE B (arriba-der): Evolución --------
+                const bX = M + blockW + blockGap, bY = y;
+                card(bX, bY, blockW, blockH);
+                blockHeader(bX, bY, blockW, 'Evolución temporal', `% de penetración por ${GRAN.periodPlural}`);
+
+                if (periods.length > 0) {
+                    // Gráfico de barras
+                    const canvasEv = document.createElement('canvas');
+                    canvasEv.width = 900; canvasEv.height = 450;
+                    tempDiv.appendChild(canvasEv);
+                    const chartEv = new Chart(canvasEv, {
+                        type: 'bar',
+                        data: {
+                            labels: periods.map(GRAN.shortLabel),
+                            datasets: [{
+                                data: pcts,
+                                backgroundColor: 'rgba(16, 168, 122, 0.92)',
+                                borderRadius: 5,
+                                borderSkipped: false
+                            }]
+                        },
+                        options: {
+                            responsive: false, animation: false,
+                            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                            scales: {
+                                y: {
+                                    beginAtZero: true, max: 100,
+                                    grid: { color: 'rgba(226,232,240,0.7)', drawBorder: false },
+                                    ticks: { color: '#94a3b8', font: { size: 18 }, callback: v => v + '%' }
+                                },
+                                x: { grid: { display: false }, ticks: { color: '#475569', font: { size: 16, weight: 'bold' } } }
+                            }
+                        }
+                    });
+                    await new Promise(r => setTimeout(r, 350));
+                    pdf.addImage(canvasEv.toDataURL('image/png', 1.0), 'PNG',
+                                 bX + 4, bY + 14, blockW - 8, blockH - 18);
+                    chartEv.destroy();
+                } else {
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'italic');
+                    pdf.setFontSize(9);
+                    pdf.text('Sin datos de evolución en el periodo seleccionado.',
+                             bX + blockW/2, bY + blockH/2, { align: 'center' });
+                }
+
+                // -------- BLOQUE C (abajo-izq): Top PA con biosim --------
+                const cX = M, cY = y + blockH + blockGap;
+                card(cX, cY, blockW, blockH);
+                blockHeader(cX, cY, blockW, 'Penetración por principio activo', 'Pacientes biosim. · total · %');
+
+                if (paArr.length > 0) {
+                    // Reservar 8mm al final para la leyenda
+                    const listTopY = cY + 14;
+                    const listAvailH = blockH - 16 - 8;   // restamos el alto para leyenda
+                    const lineH = listAvailH / Math.max(paArr.length, 1);
+                    const maxTotal = Math.max(...paArr.map(p => p.total));
+                    paArr.forEach((pa, i) => {
+                        const ly = listTopY + i * lineH + lineH/2;
+                        const niceName = pa.name.charAt(0) + pa.name.slice(1).toLowerCase();
+                        setText(COLOR.ink);
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.setFontSize(8);
+                        pdf.text(niceName, cX + 6, ly);
+                        // Barra apilada
+                        const barX = cX + 42;
+                        const barW = blockW - 42 - 32;
+                        const barH = 3;
+                        const totalLen = (pa.total / maxTotal) * barW;
+                        const bioLen = (pa.bio / maxTotal) * barW;
+                        setFill(COLOR.line);
+                        pdf.roundedRect(barX, ly - 1.5, barW, barH, 0.6, 0.6, 'F');
+                        setFill(COLOR.grey);
+                        pdf.roundedRect(barX, ly - 1.5, totalLen, barH, 0.6, 0.6, 'F');
+                        setFill(COLOR.mint);
+                        pdf.roundedRect(barX, ly - 1.5, bioLen, barH, 0.6, 0.6, 'F');
+                        // Cifra
+                        setText(COLOR.mintDeep);
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.setFontSize(8);
+                        pdf.text(fmtPct(pa.pct), cX + blockW - 6, ly, { align: 'right' });
+                    });
+                    // Leyenda al fondo del bloque
+                    const legY = cY + blockH - 3.5;
+                    setFill(COLOR.mint);
+                    pdf.rect(cX + 6, legY - 2, 2.5, 2.5, 'F');
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(6.5);
+                    pdf.text('Biosimilar', cX + 10, legY);
+                    setFill(COLOR.grey);
+                    pdf.rect(cX + 32, legY - 2, 2.5, 2.5, 'F');
+                    pdf.text('Total pacientes del PA', cX + 36, legY);
+                } else {
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'italic');
+                    pdf.setFontSize(9);
+                    pdf.text('Sin datos de principios activos biosimilarables.',
+                             cX + blockW/2, cY + blockH/2, { align: 'center' });
+                }
+
+                // -------- BLOQUE D (abajo-der): Top marcas --------
+                const dX = M + blockW + blockGap, dY = y + blockH + blockGap;
+                card(dX, dY, blockW, blockH);
+                blockHeader(dX, dY, blockW, 'Top marcas biosimilares', 'Pacientes únicos y coste asociado', COLOR.amber);
+
+                if (brandArr.length > 0) {
+                    // Limitar a las marcas que caben con espaciado razonable
+                    // Cada fila ocupa ~6.5mm (nombre + sub-texto). Si hay muchas, reducimos.
+                    const listTopY = dY + 14;
+                    const listAvailH = blockH - 16;
+                    const minLineH = 7;
+                    const lineH = Math.max(minLineH, listAvailH / Math.max(brandArr.length, 1));
+                    const visibleBrands = Math.floor(listAvailH / lineH);
+                    const brandsToShow = brandArr.slice(0, visibleBrands);
+                    const maxBrandPats = Math.max(...brandsToShow.map(b => b.pats));
+                    brandsToShow.forEach((b, i) => {
+                        const ly = listTopY + i * lineH + lineH/2;
+                        const niceName = b.brand.charAt(0) + b.brand.slice(1).toLowerCase();
+                        setText(COLOR.ink);
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.setFontSize(8);
+                        pdf.text(niceName, dX + 6, ly - 1);
+                        setText(COLOR.muted);
+                        pdf.setFont('helvetica', 'normal');
+                        pdf.setFontSize(6.5);
+                        pdf.text(b.pa, dX + 6, ly + 2.5);
+                        // Barra
+                        const barX = dX + 48;
+                        const barW = blockW - 48 - 38;
+                        const barH = 3;
+                        setFill(COLOR.line);
+                        pdf.roundedRect(barX, ly - 0.5, barW, barH, 0.6, 0.6, 'F');
+                        setFill(COLOR.mint);
+                        pdf.roundedRect(barX, ly - 0.5, barW * (b.pats / maxBrandPats), barH, 0.6, 0.6, 'F');
+                        // Cifras
+                        setText(COLOR.ink);
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.setFontSize(8);
+                        pdf.text(fmtInt(b.pats), dX + blockW - 6, ly - 1, { align: 'right' });
+                        setText(COLOR.muted);
+                        pdf.setFont('helvetica', 'normal');
+                        pdf.setFontSize(6.5);
+                        pdf.text(`pac. · ${fmtCurrency(b.coste)}`, dX + blockW - 6, ly + 2.5, { align: 'right' });
+                    });
+                } else {
+                    setText(COLOR.muted);
+                    pdf.setFont('helvetica', 'italic');
+                    pdf.setFontSize(9);
+                    pdf.text('Sin marcas biosimilares dispensadas en el periodo.',
+                             dX + blockW/2, dY + blockH/2, { align: 'center' });
+                }
+
+                // ===== FOOTER =====
+                setDraw(COLOR.line);
+                pdf.setLineWidth(0.2);
+                pdf.line(M, PAGE_H - 8, PAGE_W - M, PAGE_H - 8);
+                setText(COLOR.muted);
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(7);
+                pdf.text('Hospital Universitari i Politècnic La Fe · Servicio de Farmacia Hospitalaria', M, PAGE_H - 3);
+                pdf.text('Documento interno y confidencial', PAGE_W - M, PAGE_H - 3, { align: 'right' });
+
+                } catch (error) {
+                    console.error('❌ Error generando informe compacto de biosimilares:', error);
+                    throw error;
+                } finally {
+                    document.body.removeChild(tempDiv);
+                }
+
+                pdf.save(`Informe_Biosimilares_${GRAN.label}_Compacto_${new Date().toISOString().split('T')[0]}.pdf`);
+                console.log(`✅ Biosimilares ${GRAN.label} compacto generado`);
+            };
 
             const createChartCanvas = async (container, title, createChart) => {
                 const canvas = document.createElement('canvas');
@@ -8020,7 +9744,7 @@
                     <div className="header">
                         <div className="header-text">
                             <h1>🏥 Dashboard analizador de dispensaciones IMID</h1>
-                            <p>Sistema de indicadores cuantitativos · Farmacia Hospitalaria · H. U. i P. La Fe</p>
+                            <p>Sistema de indicadores cuantitativos · Farmacia Hospitalaria · H. U. i P. La Fe · <strong>v32</strong></p>
                         </div>
                         {(() => {
                             const activeCount = [filters.year, filters.service, filters.pathology, filters.activeIngredient, filters.dateFrom, filters.dateTo].filter(Boolean).length + (paFilterMode === 'selection' && selectedPASet.size > 0 ? 1 : 0);
@@ -8082,11 +9806,34 @@
                                 {data ? '✅' : '📁'}
                             </div>
                             <h2>{data ? `Archivo cargado: ${fileName}` : 'Cargar archivo Excel'}</h2>
-                            <p>
-                                {data 
-                                    ? `${data.length.toLocaleString()} dispensaciones cargadas` 
-                                    : 'Arrastra y suelta el archivo o haz clic para seleccionar'}
-                            </p>
+                            {data ? (() => {
+                                // Calcular fecha primera y última de dispensación
+                                const fechas = data
+                                    .map(r => r['Fecha Dispensación'])
+                                    .filter(d => d instanceof Date && !isNaN(d));
+                                let rangoStr = null;
+                                if (fechas.length > 0) {
+                                    const minD = new Date(Math.min(...fechas.map(d => d.getTime())));
+                                    const maxD = new Date(Math.max(...fechas.map(d => d.getTime())));
+                                    rangoStr = `${minD.toLocaleDateString('es-ES')} → ${maxD.toLocaleDateString('es-ES')}`;
+                                }
+                                return (
+                                    <>
+                                        <p>{data.length.toLocaleString()} dispensaciones cargadas</p>
+                                        {rangoStr && (
+                                            <p style={{
+                                                fontSize: '0.9em',
+                                                color: '#5d6d7e',
+                                                marginTop: '4px'
+                                            }}>
+                                                📅 Periodo: <strong>{rangoStr}</strong>
+                                            </p>
+                                        )}
+                                    </>
+                                );
+                            })() : (
+                                <p>Arrastra y suelta el archivo o haz clic para seleccionar</p>
+                            )}
                             <input 
                                 ref={fileInputRef}
                                 type="file" 
@@ -9414,12 +11161,50 @@
 
                                 {patientResults && patientResults.found && (
                                     <div style={{marginTop: '10px'}}>
-                                        <h3 style={{color: '#1a5276', marginBottom: '15px'}}>
-                                            Historial del paciente <span style={{color: '#2980b9'}}>{patientResults.id}</span>
-                                            <span style={{fontSize: '0.8em', color: '#666', marginLeft: '15px'}}>
-                                                ({patientResults.dispensaciones.length} dispensaciones)
-                                            </span>
-                                        </h3>
+                                        <div style={{
+                                            display: 'flex',
+                                            justifyContent: 'space-between',
+                                            alignItems: 'center',
+                                            marginBottom: '15px',
+                                            flexWrap: 'wrap',
+                                            gap: '10px'
+                                        }}>
+                                            <h3 style={{color: '#1a5276', margin: 0}}>
+                                                Historial del paciente <span style={{color: '#2980b9'}}>{patientResults.id}</span>
+                                                <span style={{fontSize: '0.8em', color: '#666', marginLeft: '15px'}}>
+                                                    ({patientResults.dispensaciones.length} dispensaciones)
+                                                </span>
+                                            </h3>
+                                            <button
+                                                onClick={() => generatePatientReportPDF(patientResults, filters)}
+                                                style={{
+                                                    padding: '10px 18px',
+                                                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    borderRadius: '8px',
+                                                    fontSize: '0.95em',
+                                                    fontWeight: '600',
+                                                    cursor: 'pointer',
+                                                    boxShadow: '0 2px 6px rgba(102,126,234,0.3)',
+                                                    transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+                                                    display: 'inline-flex',
+                                                    alignItems: 'center',
+                                                    gap: '8px'
+                                                }}
+                                                onMouseEnter={(e) => {
+                                                    e.currentTarget.style.transform = 'translateY(-1px)';
+                                                    e.currentTarget.style.boxShadow = '0 4px 10px rgba(102,126,234,0.4)';
+                                                }}
+                                                onMouseLeave={(e) => {
+                                                    e.currentTarget.style.transform = 'translateY(0)';
+                                                    e.currentTarget.style.boxShadow = '0 2px 6px rgba(102,126,234,0.3)';
+                                                }}
+                                                title="Generar informe individual del paciente en PDF"
+                                            >
+                                                📄 Exportar informe PDF
+                                            </button>
+                                        </div>
 
                                         {patientResults.tratamientos.map((tto, ttoIndex) => (
                                             <div key={ttoIndex} style={{marginBottom: '30px'}}>
@@ -9623,27 +11408,61 @@
                         {/* === VISTA INFORMES === */}
                         {viewMode === 'reports' && (
                             <>
-                                <h2 style={{marginBottom: '6px', color: '#1B4354', display: 'flex', alignItems: 'center', gap: '8px'}}>
-                                    📄 Informe de seguimiento
-                                </h2>
-                                <p style={{marginTop: 0, marginBottom: '18px', color: '#64748b', fontSize: '0.88em'}}>
-                                    Genera un informe profesional con los indicadores de dispensación del periodo. Selecciona la granularidad temporal y el formato deseado.
+                                <div className="alert alert-info" style={{marginBottom: '20px'}}>
+                                    ℹ️ <strong>Informes predefinidos:</strong> Genera informes completos en formato PDF para presentar y compartir.
+                                </div>
+
+                                <h2 style={{marginBottom: '8px', color: '#1B4354'}}>📄 Informes</h2>
+                                <p style={{marginTop: 0, marginBottom: '24px', color: '#64748b', fontSize: '0.9em'}}>
+                                    Genera un informe profesional en PDF con los indicadores del periodo. Selecciona el tipo de informe, la granularidad temporal y el formato deseado.
                                 </p>
 
                                 <div style={{
                                     background: '#fff',
                                     border: '1px solid #e2e8f0',
                                     borderRadius: '10px',
-                                    padding: '14px 18px',
+                                    padding: '20px 24px',
                                     marginBottom: '20px',
                                     boxShadow: '0 1px 3px rgba(0,0,0,0.04)'
                                 }}>
-                                    {/* Fila 1: MOSTRAR DATOS POR + botones de granularidad */}
-                                    <div style={{display: 'flex', alignItems: 'center', gap: '14px', marginBottom: '10px', flexWrap: 'wrap'}}>
-                                        <div style={{fontSize: '0.72em', fontWeight: 600, color: '#475569', letterSpacing: '0.04em', textTransform: 'uppercase', minWidth: '130px'}}>
+                                    {/* Selector 0: Tipo de informe */}
+                                    <div style={{marginBottom: '18px'}}>
+                                        <div style={{fontSize: '0.78em', fontWeight: 600, color: '#475569', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '8px'}}>
+                                            Tipo de informe
+                                        </div>
+                                        <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap'}}>
+                                            {[
+                                                {key: 'seguimiento',  label: '📊 Seguimiento general',     desc: 'Indicadores globales: pacientes, visitas, dispensaciones y coste'},
+                                                {key: 'biosimilares', label: '💊 Seguimiento de biosimilares', desc: 'Penetración de biosimilares por PA, evolución y detalle por marca'}
+                                            ].map(opt => (
+                                                <button
+                                                    key={opt.key}
+                                                    onClick={() => setReportTopic(opt.key)}
+                                                    title={opt.desc}
+                                                    style={{
+                                                        padding: '10px 20px',
+                                                        background: reportTopic === opt.key ? '#1B4354' : '#f1f5f9',
+                                                        color: reportTopic === opt.key ? 'white' : '#475569',
+                                                        border: reportTopic === opt.key ? '1px solid #1B4354' : '1px solid #e2e8f0',
+                                                        borderRadius: '6px',
+                                                        fontSize: '0.92em',
+                                                        fontWeight: reportTopic === opt.key ? 600 : 500,
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.15s ease'
+                                                    }}
+                                                >
+                                                    {opt.label}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Selector 1: Granularidad */}
+                                    <div style={{marginBottom: '18px'}}>
+                                        <div style={{fontSize: '0.78em', fontWeight: 600, color: '#475569', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '8px'}}>
                                             Mostrar datos por
                                         </div>
-                                        <div style={{display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
+                                        <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap'}}>
                                             {[
                                                 {key: 'years',    label: 'Años'},
                                                 {key: 'quarters', label: 'Trimestres'},
@@ -9653,12 +11472,12 @@
                                                     key={opt.key}
                                                     onClick={() => setReportGranularity(opt.key)}
                                                     style={{
-                                                        padding: '7px 16px',
+                                                        padding: '10px 20px',
                                                         background: reportGranularity === opt.key ? '#1B4354' : '#f1f5f9',
                                                         color: reportGranularity === opt.key ? 'white' : '#475569',
                                                         border: reportGranularity === opt.key ? '1px solid #1B4354' : '1px solid #e2e8f0',
                                                         borderRadius: '6px',
-                                                        fontSize: '0.88em',
+                                                        fontSize: '0.92em',
                                                         fontWeight: reportGranularity === opt.key ? 600 : 500,
                                                         cursor: 'pointer',
                                                         transition: 'all 0.15s ease'
@@ -9670,12 +11489,12 @@
                                         </div>
                                     </div>
 
-                                    {/* Fila 2: FORMATO + botones + resumen + botón generar (todo en línea) */}
-                                    <div style={{display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap'}}>
-                                        <div style={{fontSize: '0.72em', fontWeight: 600, color: '#475569', letterSpacing: '0.04em', textTransform: 'uppercase', minWidth: '130px'}}>
+                                    {/* Selector 2: Formato */}
+                                    <div style={{marginBottom: '24px'}}>
+                                        <div style={{fontSize: '0.78em', fontWeight: 600, color: '#475569', letterSpacing: '0.04em', textTransform: 'uppercase', marginBottom: '8px'}}>
                                             Formato del informe
                                         </div>
-                                        <div style={{display: 'flex', gap: '6px', flexWrap: 'wrap'}}>
+                                        <div style={{display: 'flex', gap: '8px', flexWrap: 'wrap'}}>
                                             {[
                                                 {key: 'complete', label: '📄 Completo',  desc: 'Varias páginas con gráficos y tablas detalladas'},
                                                 {key: 'compact',  label: '🗂️ Compacto', desc: '1 página horizontal tipo dashboard ejecutivo'}
@@ -9685,12 +11504,12 @@
                                                     onClick={() => setReportFormat(opt.key)}
                                                     title={opt.desc}
                                                     style={{
-                                                        padding: '7px 16px',
+                                                        padding: '10px 20px',
                                                         background: reportFormat === opt.key ? '#1B4354' : '#f1f5f9',
                                                         color: reportFormat === opt.key ? 'white' : '#475569',
                                                         border: reportFormat === opt.key ? '1px solid #1B4354' : '1px solid #e2e8f0',
                                                         borderRadius: '6px',
-                                                        fontSize: '0.88em',
+                                                        fontSize: '0.92em',
                                                         fontWeight: reportFormat === opt.key ? 600 : 500,
                                                         cursor: 'pointer',
                                                         transition: 'all 0.15s ease'
@@ -9700,38 +11519,47 @@
                                                 </button>
                                             ))}
                                         </div>
+                                    </div>
 
-                                        {/* Resumen + botón pegado a la derecha (flex: 1 empuja al final) */}
-                                        <div style={{display: 'flex', alignItems: 'center', gap: '16px', marginLeft: 'auto', flexWrap: 'wrap'}}>
-                                            <div style={{fontSize: '0.85em', color: '#475569'}}>
-                                                <span style={{color: '#94a3b8'}}>Vas a generar: </span>
-                                                <strong style={{color: '#1B4354'}}>
-                                                    Informe {reportFormat === 'compact' ? 'compacto' : 'completo'} por {
-                                                        reportGranularity === 'years' ? 'años' :
-                                                        reportGranularity === 'quarters' ? 'trimestres' : 'meses'
-                                                    }
-                                                </strong>
-                                            </div>
-                                            <button
-                                                onClick={() => generateSeguimientoReport(reportGranularity, reportFormat)}
-                                                disabled={!data || reportLoading}
-                                                style={{
-                                                    padding: '9px 22px',
-                                                    background: (!data || reportLoading) ? '#cbd5e1' : '#1B4354',
-                                                    color: 'white',
-                                                    border: 'none',
-                                                    borderRadius: '8px',
-                                                    fontSize: '13px',
-                                                    fontWeight: 'bold',
-                                                    cursor: (!data || reportLoading) ? 'not-allowed' : 'pointer',
-                                                    boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
-                                                    transition: 'all 0.2s ease',
-                                                    whiteSpace: 'nowrap'
-                                                }}
-                                            >
-                                                {reportLoading ? '⏳ Generando…' : '📄 Generar PDF'}
-                                            </button>
+                                    {/* Resumen de la selección + botón generar */}
+                                    <div style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        borderTop: '1px solid #f1f5f9',
+                                        paddingTop: '18px',
+                                        gap: '20px',
+                                        flexWrap: 'wrap'
+                                    }}>
+                                        <div style={{fontSize: '0.88em', color: '#475569'}}>
+                                            <span style={{color: '#94a3b8'}}>Vas a generar: </span>
+                                            <strong style={{color: '#1B4354'}}>
+                                                Informe {reportFormat === 'compact' ? 'compacto' : 'completo'} de {
+                                                    reportTopic === 'biosimilares' ? 'biosimilares' : 'seguimiento'
+                                                } por {
+                                                    reportGranularity === 'years' ? 'años' :
+                                                    reportGranularity === 'quarters' ? 'trimestres' : 'meses'
+                                                }
+                                            </strong>
                                         </div>
+                                        <button
+                                            onClick={() => generateSeguimientoReport(reportGranularity, reportFormat, reportTopic)}
+                                            disabled={!data || reportLoading}
+                                            style={{
+                                                padding: '12px 28px',
+                                                background: (!data || reportLoading) ? '#cbd5e1' : '#1B4354',
+                                                color: 'white',
+                                                border: 'none',
+                                                borderRadius: '8px',
+                                                fontSize: '14px',
+                                                fontWeight: 'bold',
+                                                cursor: (!data || reportLoading) ? 'not-allowed' : 'pointer',
+                                                boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
+                                                transition: 'all 0.2s ease'
+                                            }}
+                                        >
+                                            {reportLoading ? '⏳ Generando…' : '📄 Generar PDF'}
+                                        </button>
                                     </div>
                                 </div>
 
