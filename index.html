@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#1a5276">
-    <title>Dashboard analizador de dispensaciones IMID - V32</title>
+    <title>Dashboard analizador de dispensaciones IMID - V33</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -740,6 +740,18 @@
             const [selectedPASet, setSelectedPASet] = useState(new Set());
             const [paSearch, setPaSearch] = useState('');
             const [filteredData, setFilteredData] = useState(null);
+            // === Estados de PERSISTENCIA / Kaplan-Meier ===
+            const [persistMode, setPersistMode] = useState('pa'); // 'pa' = principio activo | 'product' = presentación comercial
+            const [persistStartDate, setPersistStartDate] = useState(''); // fecha de inicio del análisis (YYYY-MM-DD)
+            const [persistSelected, setPersistSelected] = useState(new Set()); // medicamentos seleccionados
+            const [persistSearch, setPersistSearch] = useState('');
+            const [persistCohort, setPersistCohort] = useState('all'); // 'all' | 'naive' | 'noNaive'
+            const [persistGranularity, setPersistGranularity] = useState('months'); // 'months' | 'quarters' | 'years'
+            const [persistService, setPersistService] = useState('');     // filtro de servicio prescriptor
+            const [persistPathology, setPersistPathology] = useState(''); // filtro de patología
+            const [persistResults, setPersistResults] = useState(null);
+            const [persistError, setPersistError] = useState('');
+            const [persistDetailMed, setPersistDetailMed] = useState(null); // medicamento cuyo detalle de pacientes se muestra en el modal
             const [filterOptions, setFilterOptions] = useState({
                 years: [],
                 services: [],
@@ -1183,6 +1195,407 @@
                     devoluciones: devoluciones.length > 0 ? devoluciones : null
                 });
             };
+
+            // =========================================================
+            // ====  CÁLCULO DE PERSISTENCIA + KAPLAN-MEIER  ===========
+            // =========================================================
+            const PERSIST_GAP_DAYS = 122;      // 4 meses (3 de tratamiento + 1 de margen). Gap mayor = abandono.
+            const PERSIST_WASHOUT_MONTHS = 4;  // período de lavado previo a la fecha de inicio
+            const PERSIST_CENSOR_DAYS = 75;    // si (últ. fecha tabla - últ. dispensación) < 75 días => censurado
+
+            const MS_DAY = 1000 * 60 * 60 * 24;
+            const daysBetween = (a, b) => Math.round((b.getTime() - a.getTime()) / MS_DAY);
+
+            // Dataset base para todo el análisis de persistencia: aplica los filtros
+            // específicos de la sección (servicio + patología). NO usa los filtros generales.
+            const getPersistData = () => {
+                if (!data) return null;
+                let arr = data;
+                if (persistService) arr = arr.filter(r => r['Servicio Prescriptor'] === persistService);
+                if (persistPathology) arr = arr.filter(r => r['Patología'] === persistPathology);
+                return arr;
+            };
+
+            // Devuelve la primera fecha de dispensación válida sobre el dataset filtrado
+            const getTableFirstDate = () => {
+                const d = getPersistData();
+                if (!d) return null;
+                let min = null;
+                d.forEach(r => {
+                    const dt = r['Fecha Dispensación'];
+                    if (dt instanceof Date && !isNaN(dt)) { if (!min || dt < min) min = dt; }
+                });
+                return min;
+            };
+            const getTableLastDate = () => {
+                const d = getPersistData();
+                if (!d) return null;
+                let max = null;
+                d.forEach(r => {
+                    const dt = r['Fecha Dispensación'];
+                    if (dt instanceof Date && !isNaN(dt)) { if (!max || dt > max) max = dt; }
+                });
+                return max;
+            };
+            // Fecha mínima de inicio del análisis = primera dispensación + 4 meses
+            const getMinStartDate = () => {
+                const first = getTableFirstDate();
+                if (!first) return null;
+                const d = new Date(first);
+                d.setMonth(d.getMonth() + PERSIST_WASHOUT_MONTHS);
+                return d;
+            };
+
+            // Campo del medicamento según el modo
+            const persistField = () => persistMode === 'pa'
+                ? 'Descripción Principio Activo'
+                : 'Descripción Producto Dispensado';
+
+            // Lista de medicamentos disponibles según el modo, sobre el dataset filtrado
+            const getPersistMedList = () => {
+                const d = getPersistData();
+                if (!d) return [];
+                const f = persistField();
+                return [...new Set(d
+                    .filter(r => (parseInt(r['Cantidad']) || 0) > 0)
+                    .map(r => r[f])
+                    .filter(Boolean)
+                    .map(v => String(v).trim())
+                )].sort();
+            };
+
+            // Estimador Kaplan-Meier. Recibe array de {time, event} (event=1 abandono, 0 censura).
+            // Devuelve pasos {t, surv, atRisk, events} ordenados por tiempo.
+            const kaplanMeier = (subjects) => {
+                const valid = subjects.filter(s => s.time >= 0);
+                const n = valid.length;
+                if (n === 0) return { n: 0, steps: [{ t: 0, surv: 1, atRisk: 0, events: 0 }] };
+                // Tiempos de evento únicos ordenados
+                const eventTimes = [...new Set(valid.filter(s => s.event === 1).map(s => s.time))].sort((a, b) => a - b);
+                let surv = 1;
+                const steps = [{ t: 0, surv: 1, atRisk: n, events: 0 }];
+                eventTimes.forEach(t => {
+                    const atRisk = valid.filter(s => s.time >= t).length; // en riesgo justo antes de t
+                    const dEvents = valid.filter(s => s.event === 1 && s.time === t).length;
+                    if (atRisk > 0) surv = surv * (1 - dEvents / atRisk);
+                    steps.push({ t, surv, atRisk, events: dEvents });
+                });
+                return { n, steps, subjects: valid };
+            };
+
+            // Probabilidad de supervivencia en un instante t (escalón previo)
+            const survAt = (steps, t) => {
+                let s = 1;
+                for (const step of steps) { if (step.t <= t) s = step.surv; else break; }
+                return s;
+            };
+
+            // Nº de sujetos aún en riesgo (no han tenido evento ni han sido censurados antes de t)
+            const atRiskAt = (subjects, t) => subjects.filter(s => s.time >= t).length;
+
+            const calcularPersistencia = () => {
+                setPersistError('');
+                setPersistResults(null);
+
+                if (!data) { setPersistError('Carga la tabla para continuar.'); return; }
+                if (persistSelected.size === 0) { setPersistError('Selecciona al menos un medicamento.'); return; }
+
+                const minStart = getMinStartDate();
+                const tableLast = getTableLastDate();
+                if (!minStart || !tableLast) { setPersistError('No hay fechas de dispensación válidas en la tabla.'); return; }
+
+                if (!persistStartDate) { setPersistError('Introduce la fecha de inicio del análisis.'); return; }
+                const startDate = new Date(persistStartDate + 'T00:00:00');
+                if (isNaN(startDate)) { setPersistError('Fecha de inicio no válida.'); return; }
+
+                // Validación: la fecha de inicio debe ser >= primera dispensación + 4 meses
+                if (startDate < minStart) {
+                    setPersistError(`La fecha de inicio debe ser, al menos, 4 meses posterior a la primera dispensación de la tabla. Fecha mínima permitida: ${minStart.toLocaleDateString('es-ES')}.`);
+                    return;
+                }
+
+                const f = persistField();
+                const meds = [...persistSelected];
+
+                // Pre-indexar dispensaciones positivas por paciente (ordenadas por fecha).
+                // Se trabaja sobre el dataset filtrado por servicio/patología (universo cerrado A).
+                const baseData = getPersistData();
+                const byPatient = {};
+                baseData.forEach(r => {
+                    if ((parseInt(r['Cantidad']) || 0) <= 0) return; // ignorar devoluciones
+                    const d = r['Fecha Dispensación'];
+                    if (!(d instanceof Date) || isNaN(d)) return;
+                    const id = String(r['Id'] || '').trim();
+                    if (!id) return;
+                    (byPatient[id] = byPatient[id] || []).push(r);
+                });
+                Object.values(byPatient).forEach(arr => arr.sort((a, b) => a['Fecha Dispensación'] - b['Fecha Dispensación']));
+
+                const perMed = [];
+
+                meds.forEach(med => {
+                    const medUp = String(med).trim();
+                    // Pacientes que INICIAN este medicamento en el período de estudio (>= startDate)
+                    // y que NO tuvieron dispensación de ESTE medicamento en el período previo (washout)
+                    const subjects = [];      // {id, time, event, naive, prevTreatments:[], firstDate, lastDate}
+
+                    Object.keys(byPatient).forEach(id => {
+                        const disps = byPatient[id];
+                        const medDisps = disps.filter(r => String(r[f] || '').trim() === medUp);
+                        if (medDisps.length === 0) return;
+
+                        const firstMed = medDisps[0]['Fecha Dispensación'];
+                        const firstMedPathology = String(medDisps[0]['Patología'] || '').trim() || null; // patología de la 1ª dispensación
+                        // El inicio del medicamento debe caer dentro del período de estudio
+                        if (firstMed < startDate) return;
+
+                        // Comprobar washout: no debe haber dispensaciones de ESTE medicamento antes de startDate
+                        const medBeforeStart = medDisps.some(r => r['Fecha Dispensación'] < startDate);
+                        if (medBeforeStart) return; // no es un inicio "limpio"
+
+                        // ¿Naive? = sin NINGUNA dispensación (de cualquier medicamento) ANTES de la primera
+                        // dispensación del medicamento analizado. Coherente con "tratamiento anterior":
+                        // si existe algún tratamiento previo a firstMed, el paciente es NO naive.
+                        const dispsBefore = disps.filter(r => r['Fecha Dispensación'] < firstMed);
+                        const isNaive = dispsBefore.length === 0;
+
+                        // Tratamientos previos (para no-naive): medicamentos distintos al seleccionado antes de firstMed
+                        const prevTreatments = [...new Set(dispsBefore
+                            .map(r => String(r[f] || '').trim())
+                            .filter(v => v && v !== medUp))];
+
+                        // ---- Cálculo del tiempo de persistencia (en días desde firstMed) ----
+                        // Recorremos las dispensaciones del paciente DESDE firstMed.
+                        const fromStart = disps.filter(r => r['Fecha Dispensación'] >= firstMed);
+                        let lastMedDate = firstMed;
+                        let event = 0;
+                        let time = 0;
+                        let switched = false;
+
+                        // Detectar abandono por GAP en el medicamento seleccionado o por CAMBIO a otro fármaco
+                        const medDatesFromStart = fromStart
+                            .filter(r => String(r[f] || '').trim() === medUp)
+                            .map(r => r['Fecha Dispensación']);
+
+                        // Cambio de tratamiento: primera dispensación de OTRO medicamento posterior a firstMed
+                        const switchRec = fromStart
+                            .filter(r => String(r[f] || '').trim() !== medUp && r['Fecha Dispensación'] > firstMed)
+                            .sort((a, b) => a['Fecha Dispensación'] - b['Fecha Dispensación'])[0] || null;
+                        const switchDate = switchRec ? switchRec['Fecha Dispensación'] : null;
+                        const switchMed = switchRec ? String(switchRec[f] || '').trim() : null;
+
+                        // Recorrer dispensaciones del medicamento buscando gap > umbral
+                        let gapEventDate = null;
+                        for (let i = 1; i < medDatesFromStart.length; i++) {
+                            const gap = daysBetween(medDatesFromStart[i - 1], medDatesFromStart[i]);
+                            if (gap > PERSIST_GAP_DAYS) {
+                                // abandono: el evento ocurre cuando expira la cobertura de la dispensación previa
+                                gapEventDate = new Date(medDatesFromStart[i - 1].getTime() + PERSIST_GAP_DAYS * MS_DAY);
+                                break;
+                            }
+                        }
+                        const lastMed = medDatesFromStart[medDatesFromStart.length - 1];
+
+                        // Determinar el desenlace más temprano entre: gap, cambio de tratamiento
+                        let eventDate = null;
+                        if (gapEventDate && switchDate) eventDate = gapEventDate < switchDate ? gapEventDate : switchDate;
+                        else eventDate = gapEventDate || switchDate;
+                        if (switchDate && (!gapEventDate || switchDate <= gapEventDate)) switched = true;
+
+                        let outcome = ''; // 'persist' | 'gap' | 'switch' | 'censored'
+                        if (eventDate) {
+                            // ABANDONO
+                            event = 1;
+                            time = Math.max(0, daysBetween(firstMed, eventDate));
+                            outcome = switched ? 'switch' : 'gap';
+                        } else {
+                            // No hay evento observado. ¿Se censura o se asume abandono al final de los datos?
+                            // Censura: si el seguimiento desde la última dispensación es corto (< 75 días) hasta el fin de tabla.
+                            const tailDays = daysBetween(lastMed, tableLast);
+                            if (tailDays < PERSIST_CENSOR_DAYS) {
+                                // Censurado: seguimiento insuficiente para afirmar abandono
+                                event = 0;
+                                time = Math.max(0, daysBetween(firstMed, lastMed));
+                                outcome = 'censored';
+                            } else {
+                                // Tiempo suficiente sin reposición => se considera abandono al expirar la cobertura
+                                event = 1;
+                                const expiry = new Date(lastMed.getTime() + PERSIST_GAP_DAYS * MS_DAY);
+                                const evDate = expiry < tableLast ? expiry : tableLast;
+                                time = Math.max(0, daysBetween(firstMed, evDate));
+                                outcome = 'gap';
+                            }
+                        }
+
+                        // ---- Datos para el modal "Ver detalle" (fieles al historial dentro del universo filtrado) ----
+                        // Tratamiento INMEDIATAMENTE ANTERIOR: última dispensación de OTRO medicamento con fecha < firstMed
+                        let prevTreatment = null, prevTreatmentDate = null;
+                        for (let i = disps.length - 1; i >= 0; i--) {
+                            const r = disps[i];
+                            const name = String(r[f] || '').trim();
+                            if (r['Fecha Dispensación'] < firstMed && name && name !== medUp) {
+                                prevTreatment = name; prevTreatmentDate = r['Fecha Dispensación']; break;
+                            }
+                        }
+                        // Tratamiento INMEDIATAMENTE POSTERIOR: primera dispensación de OTRO medicamento con fecha > lastMed
+                        let nextTreatment = null, nextTreatmentDate = null;
+                        for (let i = 0; i < disps.length; i++) {
+                            const r = disps[i];
+                            const name = String(r[f] || '').trim();
+                            if (r['Fecha Dispensación'] > lastMed && name && name !== medUp) {
+                                nextTreatment = name; nextTreatmentDate = r['Fecha Dispensación']; break;
+                            }
+                        }
+                        // Si el desenlace fue un CAMBIO de tratamiento, el medicamento al que cambia
+                        // es el que causó el evento (puede ser anterior a lastMed si hubo solapamiento).
+                        if (outcome === 'switch' && switchMed) {
+                            nextTreatment = switchMed; nextTreatmentDate = switchDate;
+                        }
+
+                        subjects.push({
+                            id, time, event,
+                            naive: isNaive,
+                            prevTreatments,
+                            firstDate: firstMed,
+                            lastDate: lastMed,
+                            pathology: firstMedPathology,
+                            outcome,
+                            prevTreatment, prevTreatmentDate,
+                            nextTreatment, nextTreatmentDate
+                        });
+                    });
+
+                    // Filtrar por cohorte seleccionada
+                    let cohortSubjects = subjects;
+                    if (persistCohort === 'naive') cohortSubjects = subjects.filter(s => s.naive);
+                    else if (persistCohort === 'noNaive') cohortSubjects = subjects.filter(s => !s.naive);
+
+                    // Recuento de tratamientos previos SOLO sobre la cohorte analizada y SOLO de pacientes no naive
+                    const prevTreatmentCount = {};
+                    cohortSubjects.forEach(s => {
+                        if (s.naive) return;
+                        if (s.prevTreatments.length === 0) {
+                            prevTreatmentCount['(previo no identificado)'] = (prevTreatmentCount['(previo no identificado)'] || 0) + 1;
+                        } else {
+                            s.prevTreatments.forEach(t => { prevTreatmentCount[t] = (prevTreatmentCount[t] || 0) + 1; });
+                        }
+                    });
+
+                    // Cifras del resumen, referidas a la cohorte seleccionada
+                    const cohortNaiveN = cohortSubjects.filter(s => s.naive).length;
+                    const cohortNoNaiveN = cohortSubjects.length - cohortNaiveN;
+
+                    const km = kaplanMeier(cohortSubjects);
+
+                    perMed.push({
+                        med: medUp,
+                        totalAll: cohortSubjects.length,   // total de la cohorte analizada
+                        naiveN: cohortNaiveN,
+                        noNaiveN: cohortNoNaiveN,
+                        cohortN: cohortSubjects.length,
+                        prevTreatments: Object.keys(prevTreatmentCount)
+                            .map(t => ({ name: t, n: prevTreatmentCount[t] }))
+                            .sort((a, b) => b.n - a.n),
+                        km,
+                        subjects: cohortSubjects
+                    });
+                });
+
+                // Construir los puntos temporales según granularidad (en días)
+                let stepDays, maxLabel, labelFn;
+                if (persistGranularity === 'months') { stepDays = 30.4375; labelFn = (i) => `${i} m`; }
+                else if (persistGranularity === 'quarters') { stepDays = 91.3125; labelFn = (i) => `${i}T`; }
+                else { stepDays = 365.25; labelFn = (i) => `${i} año${i === 1 ? '' : 's'}`; }
+
+                // Máximo de tiempo observado entre todos los medicamentos de la cohorte
+                let maxTime = 0;
+                perMed.forEach(m => m.subjects.forEach(s => { if (s.time > maxTime) maxTime = s.time; }));
+                const nPoints = Math.max(1, Math.ceil(maxTime / stepDays));
+                const timePoints = [];
+                for (let i = 0; i <= nPoints; i++) timePoints.push({ idx: i, t: Math.round(i * stepDays), label: i === 0 ? '0' : labelFn(i) });
+
+                // Tabla n y % por punto para cada medicamento
+                perMed.forEach(m => {
+                    m.points = timePoints.map(tp => {
+                        const surv = survAt(m.km.steps, tp.t);
+                        const atRisk = atRiskAt(m.subjects, tp.t);
+                        return {
+                            label: tp.label,
+                            t: tp.t,
+                            pct: Math.round(surv * 1000) / 10,    // % con 1 decimal
+                            nPersist: Math.round(surv * m.cohortN), // aproximación de pacientes persistentes
+                            atRisk
+                        };
+                    });
+                });
+
+                setPersistResults({
+                    perMed,
+                    timePoints,
+                    granularity: persistGranularity,
+                    cohort: persistCohort,
+                    mode: persistMode,
+                    service: persistService,
+                    pathology: persistPathology,
+                    startDate,
+                    minStart,
+                    tableLast,
+                    generatedAt: new Date()
+                });
+            };
+
+            // Dibuja la curva Kaplan-Meier (multi-medicamento) en un canvas
+            const persistChartRef = React.useRef(null);
+            React.useEffect(() => {
+                if (viewMode !== 'persistence' || !persistResults) return;
+                const canvas = document.getElementById('kmChart');
+                if (!canvas) return;
+                if (window.kmChartInstance) { window.kmChartInstance.destroy(); }
+
+                const palette = ['#2980b9', '#e74c3c', '#27ae60', '#f39c12', '#8e44ad', '#16a085', '#d35400', '#2c3e50', '#c0392b', '#7f8c8d'];
+
+                const datasets = persistResults.perMed.map((m, idx) => {
+                    const color = palette[idx % palette.length];
+                    // Construir puntos escalonados a partir de los steps KM
+                    const dataPts = persistResults.timePoints.map(tp => ({
+                        x: tp.idx,
+                        y: Math.round(survAt(m.km.steps, tp.t) * 1000) / 10
+                    }));
+                    return {
+                        label: `${m.med.length > 28 ? m.med.slice(0, 28) + '…' : m.med} (n=${m.cohortN})`,
+                        data: dataPts,
+                        borderColor: color,
+                        backgroundColor: color,
+                        stepped: true,
+                        fill: false,
+                        tension: 0,
+                        pointRadius: 2,
+                        borderWidth: 2.5
+                    };
+                });
+
+                window.kmChartInstance = new Chart(canvas, {
+                    type: 'line',
+                    data: {
+                        labels: persistResults.timePoints.map(tp => tp.label),
+                        datasets
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: {
+                            title: { display: true, text: 'Curva de persistencia (Kaplan-Meier)', font: { size: 16, weight: 'bold' }, color: '#1B4354' },
+                            legend: { position: 'bottom', labels: { boxWidth: 18, font: { size: 11 } } },
+                            tooltip: { callbacks: { label: (c) => `${c.dataset.label.split(' (n=')[0]}: ${c.parsed.y}%` } }
+                        },
+                        scales: {
+                            y: { min: 0, max: 100, title: { display: true, text: '% de pacientes persistentes' }, ticks: { callback: (v) => v + '%' } },
+                            x: { title: { display: true, text: persistResults.granularity === 'months' ? 'Meses' : persistResults.granularity === 'quarters' ? 'Trimestres' : 'Años' } }
+                        }
+                    }
+                });
+            }, [persistResults, viewMode]);
 
             const applyFilters = () => {
                 if (!data) return null;
@@ -2374,6 +2787,229 @@
                 // ── Guardado ──
                 const fechaFile = new Date().toISOString().slice(0, 10);
                 pdf.save(`Informe_paciente_${patient.id}_${fechaFile}.pdf`);
+            };
+
+            // ============================================================
+            // INFORME DE PERSISTENCIA (Kaplan-Meier) — PDF
+            // ============================================================
+            const generatePersistenciaPDF = async () => {
+                if (!persistResults) { alert('Primero calcula la persistencia.'); return; }
+
+                const { jsPDF } = window.jspdf;
+                const pdf = new jsPDF('p', 'mm', 'a4');
+                const pageWidth = 210, M = 15, contentW = pageWidth - 2 * M;
+                const BOTTOM_LIMIT = 275;
+
+                const C_PRIM = [102, 126, 234];
+                const C_DARK = [27, 67, 84];
+                const C_GREY_BG = [245, 247, 250];
+                const C_TEXT_SOFT = [93, 109, 126];
+                const palette = [[41,128,185],[231,76,60],[39,174,96],[243,156,18],[142,68,173],[22,160,133],[211,84,0],[44,62,80],[192,57,43],[127,140,141]];
+
+                const ensureSpace = (currentY, needed) => {
+                    if (currentY + needed > BOTTOM_LIMIT) {
+                        pdf.addPage();
+                        addPDFHeader(pdf, 'Persistencia al tratamiento');
+                        return 35;
+                    }
+                    return currentY;
+                };
+
+                addPDFHeader(pdf, 'Persistencia al tratamiento');
+                let y = 35;
+
+                // ── Banner de configuración ──
+                const modoTxt = persistResults.mode === 'pa' ? 'Principios activos' : 'Presentaciones comerciales';
+                const cohorteTxt = persistResults.cohort === 'all' ? 'Todos (naive + cambios)' : persistResults.cohort === 'naive' ? 'Solo naive' : 'Solo no naive';
+                const granTxt = persistResults.granularity === 'months' ? 'Mensual' : persistResults.granularity === 'quarters' ? 'Trimestral' : 'Anual';
+                const filtrosTxt = [];
+                if (persistResults.service) filtrosTxt.push(`Servicio: ${persistResults.service}`);
+                if (persistResults.pathology) filtrosTxt.push(`Patología: ${persistResults.pathology}`);
+                const hasFilters = filtrosTxt.length > 0;
+                const bannerH = hasFilters ? 28 : 22;
+
+                pdf.setFillColor(...C_PRIM);
+                pdf.roundedRect(M, y, contentW, bannerH, 3, 3, 'F');
+                pdf.setTextColor(255, 255, 255);
+                pdf.setFontSize(9); pdf.setFont('helvetica', 'bold');
+                pdf.text('ANÁLISIS DE PERSISTENCIA', M + 4, y + 6);
+                pdf.setFontSize(8); pdf.setFont('helvetica', 'normal');
+                pdf.text(`Trabajando con: ${modoTxt}`, M + 4, y + 12);
+                pdf.text(`Población: ${cohorteTxt}     ·     Granularidad: ${granTxt}`, M + 4, y + 17);
+                pdf.text(`Inicio del análisis: ${persistResults.startDate.toLocaleDateString('es-ES')}`, pageWidth - M - 4, y + 12, { align: 'right' });
+                pdf.text(`Fin de datos: ${persistResults.tableLast.toLocaleDateString('es-ES')}`, pageWidth - M - 4, y + 17, { align: 'right' });
+                if (hasFilters) {
+                    pdf.setFont('helvetica', 'bold');
+                    pdf.text(`Filtros aplicados:`, M + 4, y + 23);
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.text(filtrosTxt.join('     ·     '), M + 32, y + 23);
+                }
+                y += bannerH + 6;
+
+                // ── Curva Kaplan-Meier (capturada de canvas oculto) ──
+                y = ensureSpace(y, 95);
+                const tempDiv = document.createElement('div');
+                tempDiv.style.position = 'fixed'; tempDiv.style.left = '-9999px';
+                tempDiv.style.width = '1200px'; tempDiv.style.height = '760px';
+                document.body.appendChild(tempDiv);
+                try {
+                    const cv = document.createElement('canvas');
+                    cv.width = 1200; cv.height = 760;
+                    tempDiv.appendChild(cv);
+
+                    const datasets = persistResults.perMed.map((m, idx) => {
+                        const col = palette[idx % palette.length];
+                        const rgb = `rgb(${col[0]},${col[1]},${col[2]})`;
+                        return {
+                            label: `${m.med.length > 26 ? m.med.slice(0, 26) + '…' : m.med} (n=${m.cohortN})`,
+                            data: persistResults.timePoints.map(tp => ({ x: tp.idx, y: Math.round(survAt(m.km.steps, tp.t) * 1000) / 10 })),
+                            borderColor: rgb, backgroundColor: rgb,
+                            stepped: true, fill: false, tension: 0, pointRadius: 2, borderWidth: 3
+                        };
+                    });
+                    const ch = new Chart(cv, {
+                        type: 'line',
+                        data: { labels: persistResults.timePoints.map(tp => tp.label), datasets },
+                        options: {
+                            responsive: false, animation: false,
+                            plugins: {
+                                title: { display: true, text: 'Curva de persistencia (Kaplan-Meier)', font: { size: 26, weight: 'bold' }, color: '#1B4354' },
+                                legend: { position: 'bottom', labels: { font: { size: 18 }, boxWidth: 16, padding: 10 } }
+                            },
+                            scales: {
+                                y: { min: 0, max: 100, title: { display: true, text: '% de pacientes persistentes', font: { size: 18 } }, ticks: { font: { size: 16 }, callback: (v) => v + '%' } },
+                                x: { title: { display: true, text: granTxt === 'Mensual' ? 'Meses' : granTxt === 'Trimestral' ? 'Trimestres' : 'Años', font: { size: 18 } }, ticks: { font: { size: 16 } } }
+                            }
+                        }
+                    });
+                    await new Promise(r => setTimeout(r, 350));
+                    const imgW = contentW, imgH = contentW * 760 / 1200;
+                    pdf.addImage(cv.toDataURL('image/png', 1.0), 'PNG', M, y, imgW, imgH);
+                    ch.destroy();
+                    y += imgH + 8;
+                } finally {
+                    document.body.removeChild(tempDiv);
+                }
+
+                // ── Sección por cada medicamento ──
+                persistResults.perMed.forEach((m, idx) => {
+                    y = ensureSpace(y, 40);
+
+                    // Título medicamento con marca de color
+                    const col = palette[idx % palette.length];
+                    pdf.setFillColor(col[0], col[1], col[2]);
+                    pdf.rect(M, y, 3, 7, 'F');
+                    pdf.setFontSize(11); pdf.setFont('helvetica', 'bold');
+                    pdf.setTextColor(...C_DARK);
+                    const medTitle = m.med.length > 70 ? m.med.slice(0, 70) + '…' : m.med;
+                    pdf.text(medTitle, M + 6, y + 5);
+                    y += 11;
+
+                    // Resumen de población
+                    const resumenLines = [`Total de pacientes analizados: ${m.totalAll}`];
+                    if (persistResults.cohort === 'all') {
+                        resumenLines.push(`Naive: ${m.naiveN} (${m.totalAll ? ((m.naiveN / m.totalAll) * 100).toFixed(1) : 0}%)   ·   No naive: ${m.noNaiveN} (${m.totalAll ? ((m.noNaiveN / m.totalAll) * 100).toFixed(1) : 0}%)`);
+                    }
+                    const boxH = 6 + resumenLines.length * 5;
+                    pdf.setFillColor(...C_GREY_BG);
+                    pdf.roundedRect(M, y, contentW, boxH, 2, 2, 'F');
+                    pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...C_DARK);
+                    pdf.text('Población incluida', M + 3, y + 5);
+                    pdf.setFont('helvetica', 'normal'); pdf.setTextColor(60, 60, 60);
+                    let yy = y + 5;
+                    resumenLines.forEach(l => { yy += 5; pdf.text(l, M + 3, yy); });
+                    y += boxH + 4;
+
+                    // Tabla de tratamientos previos (solo si procede)
+                    if (persistResults.cohort !== 'naive' && m.prevTreatments.length > 0) {
+                        y = ensureSpace(y, 14 + m.prevTreatments.length * 5);
+                        pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...C_DARK);
+                        pdf.text('Tratamientos previos (pacientes no naive)', M, y + 3);
+                        y += 6;
+                        // cabecera
+                        pdf.setFillColor(...C_DARK); pdf.rect(M, y, contentW, 6, 'F');
+                        pdf.setTextColor(255, 255, 255); pdf.setFontSize(7);
+                        pdf.text('Tratamiento anterior', M + 2, y + 4);
+                        pdf.text('Pacientes', M + contentW - 50, y + 4, { align: 'right' });
+                        pdf.text('%', M + contentW - 2, y + 4, { align: 'right' });
+                        y += 6;
+                        pdf.setTextColor(60, 60, 60); pdf.setFont('helvetica', 'normal');
+                        m.prevTreatments.forEach((pt, i) => {
+                            if (i % 2 === 0) { pdf.setFillColor(248, 250, 252); pdf.rect(M, y, contentW, 5, 'F'); }
+                            pdf.text((pt.name.length > 60 ? pt.name.slice(0, 60) + '…' : pt.name), M + 2, y + 3.5);
+                            pdf.text(String(pt.n), M + contentW - 50, y + 3.5, { align: 'right' });
+                            pdf.text(`${m.noNaiveN ? ((pt.n / m.noNaiveN) * 100).toFixed(1) : 0}%`, M + contentW - 2, y + 3.5, { align: 'right' });
+                            y += 5;
+                            y = ensureSpace(y, 6);
+                        });
+                        y += 4;
+                    }
+
+                    // Tabla de persistencia por punto temporal
+                    y = ensureSpace(y, 14 + Math.min(m.points.length, 8) * 5);
+                    pdf.setFontSize(8); pdf.setFont('helvetica', 'bold'); pdf.setTextColor(...C_DARK);
+                    pdf.text(`Persistencia por punto temporal (cohorte n=${m.cohortN})`, M, y + 3);
+                    y += 6;
+                    pdf.setFillColor(...C_PRIM); pdf.rect(M, y, contentW, 6, 'F');
+                    pdf.setTextColor(255, 255, 255); pdf.setFontSize(7);
+                    const col2 = M + contentW * 0.40, col3 = M + contentW * 0.65, col4 = M + contentW - 2;
+                    pdf.text('Tiempo', M + 2, y + 4);
+                    pdf.text('En riesgo', col2, y + 4, { align: 'right' });
+                    pdf.text('Persistentes (n)', col3, y + 4, { align: 'right' });
+                    pdf.text('Persistencia (%)', col4, y + 4, { align: 'right' });
+                    y += 6;
+                    pdf.setFont('helvetica', 'normal');
+                    m.points.forEach((p, i) => {
+                        y = ensureSpace(y, 6);
+                        if (i % 2 === 0) { pdf.setFillColor(248, 250, 252); pdf.rect(M, y, contentW, 5, 'F'); }
+                        pdf.setTextColor(60, 60, 60);
+                        pdf.text(String(p.label), M + 2, y + 3.5);
+                        pdf.text(String(p.atRisk), col2, y + 3.5, { align: 'right' });
+                        pdf.text(String(p.nPersist), col3, y + 3.5, { align: 'right' });
+                        pdf.setFont('helvetica', 'bold');
+                        pdf.text(`${p.pct}%`, col4, y + 3.5, { align: 'right' });
+                        pdf.setFont('helvetica', 'normal');
+                        y += 5;
+                    });
+                    y += 8;
+                });
+
+                // ── Nota metodológica ──
+                y = ensureSpace(y, 22);
+                pdf.setFontSize(6.5); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(...C_TEXT_SOFT);
+                const nota = 'Definiciones: abandono = ausencia de reposición durante más de 4 meses (122 días) desde la cobertura esperada, o cambio a otro medicamento. Censura = pacientes cuyo seguimiento desde la última dispensación hasta el fin de la tabla es inferior a 75 días. Curva estimada por el método de Kaplan-Meier. Cada medicamento se analiza de forma independiente.';
+                const notaLines = pdf.splitTextToSize(nota, contentW);
+                pdf.text(notaLines, M, y + 3);
+
+                addPDFFooter(pdf);
+                const fechaFile2 = new Date().toISOString().slice(0, 10);
+                pdf.save(`Informe_persistencia_${fechaFile2}.pdf`);
+            };
+
+            // Exporta a Excel el detalle de pacientes de un medicamento (modal "Ver detalle")
+            const exportPersistDetailExcel = (detail) => {
+                if (!detail || !detail.subjects) return;
+                const fmt = (d) => (d instanceof Date && !isNaN(d)) ? d.toLocaleDateString('es-ES') : '';
+                const outcomeLabel = { persist: 'Persiste', gap: 'Abandono (gap)', switch: 'Cambio de tratamiento', censored: 'Censurado' };
+                const rows = [...detail.subjects].sort((a, b) => a.firstDate - b.firstDate).map(s => ({
+                    'Id paciente': s.id,
+                    'Tipo': s.naive ? 'Naive' : 'No naive',
+                    'Patología': s.pathology || '',
+                    'Tratamiento anterior': s.prevTreatment || '',
+                    'Fecha tratamiento anterior': fmt(s.prevTreatmentDate),
+                    'Primera dispensación': fmt(s.firstDate),
+                    'Última dispensación': fmt(s.lastDate),
+                    'Tratamiento posterior': s.nextTreatment || '',
+                    'Fecha tratamiento posterior': fmt(s.nextTreatmentDate),
+                    'Desenlace': outcomeLabel[s.outcome] || ''
+                }));
+                const ws = XLSX.utils.json_to_sheet(rows);
+                const wb = XLSX.utils.book_new();
+                const sheetName = ('Detalle ' + detail.med).slice(0, 28).replace(/[\\\/\?\*\[\]:]/g, ' ');
+                XLSX.utils.book_append_sheet(wb, ws, sheetName);
+                const fecha = new Date().toISOString().slice(0, 10);
+                const safeMed = detail.med.replace(/[^a-zA-Z0-9]+/g, '_').slice(0, 40);
+                XLSX.writeFile(wb, `Detalle_persistencia_${safeMed}_${fecha}.xlsx`);
             };
 
                         const generateReport1 = async (dataToProcess) => {
@@ -9744,7 +10380,7 @@
                     <div className="header">
                         <div className="header-text">
                             <h1>🏥 Dashboard analizador de dispensaciones IMID</h1>
-                            <p>Sistema de indicadores cuantitativos · Farmacia Hospitalaria · H. U. i P. La Fe · <strong>v32</strong></p>
+                            <p>Sistema de indicadores cuantitativos · Farmacia Hospitalaria · H. U. i P. La Fe · <strong>v33</strong></p>
                         </div>
                         {(() => {
                             const activeCount = [filters.year, filters.service, filters.pathology, filters.activeIngredient, filters.dateFrom, filters.dateTo].filter(Boolean).length + (paFilterMode === 'selection' && selectedPASet.size > 0 ? 1 : 0);
@@ -10044,6 +10680,12 @@
                                 📄 Informes
                             </button>
                             <button
+                                className={`toggle-btn ${viewMode === 'persistence' ? 'active' : ''}`}
+                                onClick={() => setViewMode('persistence')}
+                            >
+                                📈 Persistencia
+                            </button>
+                            <button
                                 className={`toggle-btn ${viewMode === 'patient' ? 'active' : ''}`}
                                 onClick={() => setViewMode('patient')}
                             >
@@ -10052,9 +10694,9 @@
                             <button
                                 className="toggle-btn"
                                 onClick={() => window.open('https://embai33.github.io/Normalizador_medicamentos/', '_blank')}
-                                style={{background: '#28a745', color: 'white'}}
+                                style={{background: '#28a745', color: 'white', fontWeight: 'normal', lineHeight: '1.15', fontSize: '0.85em'}}
                             >
-                                💊 Normalizar medicamentos
+                                💊 Normalizar medicamentos<br />y patologías
                             </button>
                         </div>
 
@@ -11401,6 +12043,379 @@
                                             </div>
                                         )}
                                     </div>
+                                )}
+                            </>
+                        )}
+
+                        {/* === VISTA PERSISTENCIA / KAPLAN-MEIER === */}
+                        {viewMode === 'persistence' && (
+                            <>
+                                <div className="alert alert-info" style={{marginBottom: '20px'}}>
+                                    ℹ️ <strong>Persistencia al tratamiento:</strong> Analiza qué pacientes que <em>inician</em> un tratamiento continúan con él a lo largo del tiempo y dibuja la curva de Kaplan-Meier. Cada medicamento se analiza de forma independiente.
+                                </div>
+
+                                <h2 style={{marginBottom: '8px', color: '#1B4354'}}>📈 Persistencia al tratamiento</h2>
+                                <p style={{marginTop: 0, marginBottom: '24px', color: '#64748b', fontSize: '0.9em'}}>
+                                    Selecciona el tipo de medicamento, la fecha de inicio del análisis y los medicamentos a comparar.
+                                </p>
+
+                                {!data && (
+                                    <div className="alert" style={{background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '10px', padding: '15px'}}>
+                                        ⚠️ Debes cargar un archivo de datos primero.
+                                    </div>
+                                )}
+
+                                {data && (
+                                    <>
+                                        {/* Panel de configuración */}
+                                        <div style={{background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '20px 24px', marginBottom: '20px'}}>
+                                            {/* Modo: PA vs Producto */}
+                                            <div style={{marginBottom: '18px'}}>
+                                                <label style={{display: 'block', fontWeight: 600, color: '#1a5276', marginBottom: '8px'}}>1. Trabajar con:</label>
+                                                <div style={{display: 'flex', gap: '10px', flexWrap: 'wrap'}}>
+                                                    {[['pa', '🧬 Principios activos'], ['product', '💊 Presentaciones comerciales']].map(([val, lbl]) => (
+                                                        <button key={val}
+                                                            onClick={() => { setPersistMode(val); setPersistSelected(new Set()); setPersistResults(null); }}
+                                                            style={{
+                                                                padding: '10px 18px', borderRadius: '8px', cursor: 'pointer', fontWeight: 600,
+                                                                border: persistMode === val ? '2px solid #2980b9' : '2px solid #e2e8f0',
+                                                                background: persistMode === val ? '#2980b9' : '#fff',
+                                                                color: persistMode === val ? '#fff' : '#475569'
+                                                            }}>{lbl}</button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            {/* Fecha de inicio */}
+                                            <div style={{marginBottom: '18px'}}>
+                                                <label style={{display: 'block', fontWeight: 600, color: '#1a5276', marginBottom: '8px'}}>2. Fecha de inicio del análisis:</label>
+                                                <input type="date" value={persistStartDate}
+                                                    onChange={(e) => setPersistStartDate(e.target.value)}
+                                                    style={{padding: '10px 14px', border: '2px solid #2980b9', borderRadius: '8px', fontSize: '1em'}} />
+                                                {getMinStartDate() && (
+                                                    <p style={{margin: '8px 0 0', fontSize: '0.85em', color: '#64748b'}}>
+                                                        📅 Fecha mínima permitida (primera dispensación + 4 meses): <strong>{getMinStartDate().toLocaleDateString('es-ES')}</strong>.
+                                                        {' '}Última fecha de la tabla: <strong>{getTableLastDate() && getTableLastDate().toLocaleDateString('es-ES')}</strong>.
+                                                    </p>
+                                                )}
+                                            </div>
+
+                                            {/* Cohorte */}
+                                            <div style={{marginBottom: '18px'}}>
+                                                <label style={{display: 'block', fontWeight: 600, color: '#1a5276', marginBottom: '8px'}}>3. Población a analizar:</label>
+                                                <div style={{display: 'flex', gap: '10px', flexWrap: 'wrap'}}>
+                                                    {[['all', 'Todos (naive + cambios)'], ['naive', 'Solo naive'], ['noNaive', 'Solo no naive']].map(([val, lbl]) => (
+                                                        <button key={val}
+                                                            onClick={() => setPersistCohort(val)}
+                                                            style={{
+                                                                padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9em',
+                                                                border: persistCohort === val ? '2px solid #27ae60' : '2px solid #e2e8f0',
+                                                                background: persistCohort === val ? '#27ae60' : '#fff',
+                                                                color: persistCohort === val ? '#fff' : '#475569'
+                                                            }}>{lbl}</button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            {/* Granularidad */}
+                                            <div style={{marginBottom: '18px'}}>
+                                                <label style={{display: 'block', fontWeight: 600, color: '#1a5276', marginBottom: '8px'}}>4. Granularidad temporal:</label>
+                                                <div style={{display: 'flex', gap: '10px', flexWrap: 'wrap'}}>
+                                                    {[['months', 'Mensual'], ['quarters', 'Trimestral'], ['years', 'Anual']].map(([val, lbl]) => (
+                                                        <button key={val}
+                                                            onClick={() => setPersistGranularity(val)}
+                                                            style={{
+                                                                padding: '8px 16px', borderRadius: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9em',
+                                                                border: persistGranularity === val ? '2px solid #8e44ad' : '2px solid #e2e8f0',
+                                                                background: persistGranularity === val ? '#8e44ad' : '#fff',
+                                                                color: persistGranularity === val ? '#fff' : '#475569'
+                                                            }}>{lbl}</button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            {/* Filtros opcionales de servicio y patología */}
+                                            <div style={{marginBottom: '18px'}}>
+                                                <label style={{display: 'block', fontWeight: 600, color: '#1a5276', marginBottom: '8px'}}>5. Filtros opcionales (acotan el universo de análisis):</label>
+                                                <div style={{display: 'flex', gap: '12px', flexWrap: 'wrap'}}>
+                                                    <div style={{flex: '1 1 240px'}}>
+                                                        <label style={{display: 'block', fontSize: '0.85em', color: '#475569', marginBottom: '4px'}}>Servicio prescriptor</label>
+                                                        <select value={persistService}
+                                                            onChange={(e) => { setPersistService(e.target.value); setPersistSelected(new Set()); setPersistResults(null); }}
+                                                            style={{width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px', background: '#fff'}}>
+                                                            <option value="">Todos los servicios</option>
+                                                            {filterOptions.services && filterOptions.services.map(s => (
+                                                                <option key={s} value={s}>{s}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                    <div style={{flex: '1 1 240px'}}>
+                                                        <label style={{display: 'block', fontSize: '0.85em', color: '#475569', marginBottom: '4px'}}>Patología</label>
+                                                        <select value={persistPathology}
+                                                            onChange={(e) => { setPersistPathology(e.target.value); setPersistSelected(new Set()); setPersistResults(null); }}
+                                                            style={{width: '100%', padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: '8px', background: '#fff'}}>
+                                                            <option value="">Todas las patologías</option>
+                                                            {filterOptions.pathologies && filterOptions.pathologies.map(p => (
+                                                                <option key={p} value={p}>{p}</option>
+                                                            ))}
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                {(persistService || persistPathology) && (
+                                                    <p style={{margin: '8px 0 0', fontSize: '0.82em', color: '#475569', fontStyle: 'italic'}}>
+                                                        ℹ️ Los filtros se aplican a TODAS las dispensaciones antes del análisis. Los pacientes con tratamientos previos en otros servicios o patologías se considerarán naive porque su historia previa queda fuera del universo seleccionado.
+                                                    </p>
+                                                )}
+                                            </div>
+
+                                            {/* Selección de medicamentos */}
+                                            <div style={{marginBottom: '18px'}}>
+                                                <label style={{display: 'block', fontWeight: 600, color: '#1a5276', marginBottom: '8px'}}>
+                                                    6. Medicamentos a comparar ({persistSelected.size} seleccionados):
+                                                </label>
+                                                <input type="text" value={persistSearch}
+                                                    onChange={(e) => setPersistSearch(e.target.value)}
+                                                    placeholder="Buscar medicamento..."
+                                                    style={{width: '100%', maxWidth: '400px', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: '8px', marginBottom: '10px'}} />
+                                                <div style={{maxHeight: '220px', overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px', background: '#f8fafc'}}>
+                                                    {getPersistMedList()
+                                                        .filter(m => m.toLowerCase().includes(persistSearch.toLowerCase()))
+                                                        .map(m => (
+                                                            <label key={m} style={{display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 6px', cursor: 'pointer', fontSize: '0.9em'}}>
+                                                                <input type="checkbox"
+                                                                    checked={persistSelected.has(m)}
+                                                                    onChange={() => {
+                                                                        const ns = new Set(persistSelected);
+                                                                        if (ns.has(m)) ns.delete(m); else ns.add(m);
+                                                                        setPersistSelected(ns);
+                                                                    }} />
+                                                                <span>{m}</span>
+                                                            </label>
+                                                        ))}
+                                                </div>
+                                            </div>
+
+                                            <button
+                                                onClick={calcularPersistencia}
+                                                disabled={persistSelected.size === 0 || !persistStartDate}
+                                                style={{
+                                                    padding: '12px 28px', borderRadius: '8px', border: 'none', fontWeight: 700, fontSize: '1.05em',
+                                                    cursor: (persistSelected.size === 0 || !persistStartDate) ? 'not-allowed' : 'pointer',
+                                                    background: (persistSelected.size === 0 || !persistStartDate) ? '#ccc' : '#1B4354',
+                                                    color: '#fff'
+                                                }}>
+                                                Calcular persistencia
+                                            </button>
+                                        </div>
+
+                                        {persistError && (
+                                            <div className="alert" style={{background: '#fdecea', border: '1px solid #e74c3c', borderRadius: '10px', padding: '15px', marginBottom: '20px', color: '#a93226'}}>
+                                                ⚠️ {persistError}
+                                            </div>
+                                        )}
+
+                                        {/* Resultados */}
+                                        {persistResults && (
+                                            <div>
+                                                {/* Barra de acciones */}
+                                                <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px'}}>
+                                                    <div style={{fontSize: '0.85em', color: '#475569'}}>
+                                                        {(persistResults.service || persistResults.pathology) ? (
+                                                            <span style={{background: '#eaf2f8', border: '1px solid #aed6f1', borderRadius: '6px', padding: '4px 10px', display: 'inline-block'}}>
+                                                                <strong>Filtros aplicados:</strong>
+                                                                {persistResults.service ? ` Servicio = ${persistResults.service}` : ''}
+                                                                {persistResults.service && persistResults.pathology ? '   ·   ' : ''}
+                                                                {persistResults.pathology ? ` Patología = ${persistResults.pathology}` : ''}
+                                                            </span>
+                                                        ) : (
+                                                            <span style={{fontStyle: 'italic', color: '#94a3b8'}}>Sin filtros · análisis sobre todo el dataset</span>
+                                                        )}
+                                                    </div>
+                                                    <button
+                                                        onClick={generatePersistenciaPDF}
+                                                        style={{
+                                                            padding: '10px 22px', borderRadius: '8px', border: 'none', fontWeight: 700,
+                                                            cursor: 'pointer', background: '#1B4354', color: '#fff', fontSize: '0.95em'
+                                                        }}>
+                                                        📄 Exportar a PDF
+                                                    </button>
+                                                </div>
+                                                {/* Gráfica KM */}
+                                                <div style={{background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '20px', marginBottom: '24px'}}>
+                                                    <div style={{height: '420px'}}>
+                                                        <canvas id="kmChart"></canvas>
+                                                    </div>
+                                                </div>
+
+                                                {/* Por cada medicamento: resumen + tabla */}
+                                                {persistResults.perMed.map((m, idx) => (
+                                                    <div key={m.med} style={{background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '20px 24px', marginBottom: '20px'}}>
+                                                        <h3 style={{color: '#1B4354', marginTop: 0}}>{m.med}</h3>
+
+                                                        {/* Resumen descriptivo de la población */}
+                                                        <div style={{background: '#f8fafc', borderRadius: '8px', padding: '14px 18px', marginBottom: '16px'}}>
+                                                            <strong style={{color: '#1a5276'}}>
+                                                                Población incluida (inicios en el período){persistResults.cohort === 'naive' ? ' — solo naive' : persistResults.cohort === 'noNaive' ? ' — solo no naive' : ''}:
+                                                            </strong>
+                                                            <ul style={{margin: '8px 0 0', paddingLeft: '20px', fontSize: '0.92em', color: '#334155'}}>
+                                                                <li>
+                                                                    Total de pacientes analizados: <strong>{m.totalAll}</strong>
+                                                                    {m.totalAll > 0 && (
+                                                                        <button
+                                                                            onClick={() => setPersistDetailMed(m.med)}
+                                                                            style={{
+                                                                                marginLeft: '10px', padding: '2px 10px', fontSize: '0.82em',
+                                                                                border: '1px solid #2980b9', borderRadius: '6px', background: '#eaf2f8',
+                                                                                color: '#1a5276', cursor: 'pointer', fontWeight: 600
+                                                                            }}>
+                                                                            👁️ Ver detalle
+                                                                        </button>
+                                                                    )}
+                                                                </li>
+                                                                {persistResults.cohort === 'all' && (
+                                                                    <>
+                                                                        <li>Naive: <strong>{m.naiveN}</strong> ({m.totalAll ? ((m.naiveN / m.totalAll) * 100).toFixed(1) : 0}%)</li>
+                                                                        <li>No naive: <strong>{m.noNaiveN}</strong> ({m.totalAll ? ((m.noNaiveN / m.totalAll) * 100).toFixed(1) : 0}%)</li>
+                                                                    </>
+                                                                )}
+                                                            </ul>
+                                                            {persistResults.cohort !== 'naive' && m.prevTreatments.length > 0 && (
+                                                                <div style={{marginTop: '10px'}}>
+                                                                    <strong style={{color: '#1a5276', fontSize: '0.92em'}}>Tratamientos previos (pacientes no naive):</strong>
+                                                                    <table style={{width: '100%', maxWidth: '480px', borderCollapse: 'collapse', marginTop: '6px', fontSize: '0.85em'}}>
+                                                                        <thead><tr style={{background: '#e2e8f0'}}>
+                                                                            <th style={{textAlign: 'left', padding: '5px 8px'}}>Tratamiento anterior</th>
+                                                                            <th style={{textAlign: 'right', padding: '5px 8px'}}>Pacientes</th>
+                                                                            <th style={{textAlign: 'right', padding: '5px 8px'}}>%</th>
+                                                                        </tr></thead>
+                                                                        <tbody>
+                                                                            {m.prevTreatments.map(pt => (
+                                                                                <tr key={pt.name} style={{borderBottom: '1px solid #eee'}}>
+                                                                                    <td style={{padding: '5px 8px'}}>{pt.name}</td>
+                                                                                    <td style={{textAlign: 'right', padding: '5px 8px'}}>{pt.n}</td>
+                                                                                    <td style={{textAlign: 'right', padding: '5px 8px'}}>{m.noNaiveN ? ((pt.n / m.noNaiveN) * 100).toFixed(1) : 0}%</td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                </div>
+                                                            )}
+                                                        </div>
+
+                                                        {/* Tabla de persistencia por punto temporal */}
+                                                        <strong style={{color: '#1a5276', fontSize: '0.92em'}}>Persistencia por punto temporal (cohorte analizada: n={m.cohortN}):</strong>
+                                                        <div style={{overflowX: 'auto', marginTop: '8px'}}>
+                                                            <table style={{borderCollapse: 'collapse', fontSize: '0.85em', minWidth: '420px'}}>
+                                                                <thead><tr style={{background: '#1B4354', color: '#fff'}}>
+                                                                    <th style={{padding: '6px 12px', textAlign: 'left'}}>Tiempo</th>
+                                                                    <th style={{padding: '6px 12px', textAlign: 'right'}}>En riesgo</th>
+                                                                    <th style={{padding: '6px 12px', textAlign: 'right'}}>Persistentes (n)</th>
+                                                                    <th style={{padding: '6px 12px', textAlign: 'right'}}>Persistencia (%)</th>
+                                                                </tr></thead>
+                                                                <tbody>
+                                                                    {m.points.map(p => (
+                                                                        <tr key={p.label} style={{borderBottom: '1px solid #eee'}}>
+                                                                            <td style={{padding: '5px 12px'}}>{p.label}</td>
+                                                                            <td style={{padding: '5px 12px', textAlign: 'right'}}>{p.atRisk}</td>
+                                                                            <td style={{padding: '5px 12px', textAlign: 'right'}}>{p.nPersist}</td>
+                                                                            <td style={{padding: '5px 12px', textAlign: 'right', fontWeight: 600}}>{p.pct}%</td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    </div>
+                                                ))}
+
+                                                <div style={{fontSize: '0.8em', color: '#94a3b8', marginTop: '8px'}}>
+                                                    Definiciones: abandono = ausencia de reposición durante más de 4 meses (122 días) desde la cobertura esperada, o cambio a otro medicamento. Censura = pacientes cuyo seguimiento desde la última dispensación hasta el fin de la tabla es inferior a 75 días. Curva estimada por el método de Kaplan-Meier.
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* MODAL: detalle de pacientes incluidos */}
+                                        {persistDetailMed && persistResults && (() => {
+                                            const detail = persistResults.perMed.find(x => x.med === persistDetailMed);
+                                            if (!detail) return null;
+                                            const fmt = (d) => (d instanceof Date && !isNaN(d)) ? d.toLocaleDateString('es-ES') : '—';
+                                            const outcomeLabel = { persist: 'Persiste', gap: 'Abandono (gap)', switch: 'Cambio de tratamiento', censored: 'Censurado' };
+                                            const outcomeColor = { persist: '#27ae60', gap: '#e67e22', switch: '#c0392b', censored: '#7f8c8d' };
+                                            const rows = [...detail.subjects].sort((a, b) => a.firstDate - b.firstDate);
+                                            return (
+                                                <div
+                                                    onClick={() => setPersistDetailMed(null)}
+                                                    style={{position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'}}>
+                                                    <div onClick={(e) => e.stopPropagation()}
+                                                        style={{background: '#fff', borderRadius: '12px', maxWidth: '1080px', width: '100%', maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 10px 40px rgba(0,0,0,0.3)'}}>
+                                                        {/* Cabecera del modal */}
+                                                        <div style={{padding: '18px 24px', borderBottom: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                                            <div>
+                                                                <h3 style={{margin: 0, color: '#1B4354'}}>Detalle de pacientes incluidos</h3>
+                                                                <p style={{margin: '4px 0 0', color: '#64748b', fontSize: '0.88em'}}>{detail.med} · n = {detail.cohortN}</p>
+                                                            </div>
+                                                            <button onClick={() => setPersistDetailMed(null)}
+                                                                style={{border: 'none', background: '#f1f5f9', borderRadius: '8px', width: '34px', height: '34px', cursor: 'pointer', fontSize: '1.2em', color: '#475569'}}>×</button>
+                                                        </div>
+                                                        {/* Cuerpo con tabla */}
+                                                        <div style={{overflow: 'auto', padding: '0 24px'}}>
+                                                            <table style={{width: '100%', borderCollapse: 'collapse', fontSize: '0.82em'}}>
+                                                                <thead style={{position: 'sticky', top: 0, background: '#1B4354', color: '#fff'}}>
+                                                                    <tr>
+                                                                        <th style={{padding: '10px 8px', textAlign: 'left'}}>Id paciente</th>
+                                                                        <th style={{padding: '10px 8px', textAlign: 'center'}}>Tipo</th>
+                                                                        <th style={{padding: '10px 8px', textAlign: 'left'}}>Patología</th>
+                                                                        <th style={{padding: '10px 8px', textAlign: 'left'}}>Tratamiento anterior</th>
+                                                                        <th style={{padding: '10px 8px', textAlign: 'center'}}>1ª dispensación</th>
+                                                                        <th style={{padding: '10px 8px', textAlign: 'center'}}>Última dispensación</th>
+                                                                        <th style={{padding: '10px 8px', textAlign: 'left'}}>Tratamiento posterior</th>
+                                                                        <th style={{padding: '10px 8px', textAlign: 'center'}}>Desenlace</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    {rows.map((s, i) => (
+                                                                        <tr key={s.id + '_' + i} style={{borderBottom: '1px solid #eee', background: i % 2 ? '#f8fafc' : '#fff'}}>
+                                                                            <td style={{padding: '8px', fontFamily: 'monospace'}}>{s.id}</td>
+                                                                            <td style={{padding: '8px', textAlign: 'center'}}>
+                                                                                <span style={{padding: '2px 8px', borderRadius: '10px', fontSize: '0.85em', background: s.naive ? '#eafaf1' : '#fef5e7', color: s.naive ? '#1e8449' : '#b9770e'}}>
+                                                                                    {s.naive ? 'Naive' : 'No naive'}
+                                                                                </span>
+                                                                            </td>
+                                                                            <td style={{padding: '8px'}}>{s.pathology || <span style={{color: '#cbd5e1'}}>—</span>}</td>
+                                                                            <td style={{padding: '8px'}}>
+                                                                                {s.prevTreatment
+                                                                                    ? <span>{s.prevTreatment} <span style={{color: '#94a3b8'}}>({fmt(s.prevTreatmentDate)})</span></span>
+                                                                                    : <span style={{color: '#cbd5e1'}}>—</span>}
+                                                                            </td>
+                                                                            <td style={{padding: '8px', textAlign: 'center'}}>{fmt(s.firstDate)}</td>
+                                                                            <td style={{padding: '8px', textAlign: 'center'}}>{fmt(s.lastDate)}</td>
+                                                                            <td style={{padding: '8px'}}>
+                                                                                {s.nextTreatment
+                                                                                    ? <span>{s.nextTreatment} <span style={{color: '#94a3b8'}}>({fmt(s.nextTreatmentDate)})</span></span>
+                                                                                    : <span style={{color: '#cbd5e1'}}>—</span>}
+                                                                            </td>
+                                                                            <td style={{padding: '8px', textAlign: 'center'}}>
+                                                                                <span style={{color: outcomeColor[s.outcome] || '#475569', fontWeight: 600}}>{outcomeLabel[s.outcome] || '—'}</span>
+                                                                            </td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                        {/* Pie del modal */}
+                                                        <div style={{padding: '12px 24px', borderTop: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+                                                            <span style={{fontSize: '0.78em', color: '#94a3b8'}}>
+                                                                "Tratamiento anterior/posterior" = dispensación de otro medicamento inmediatamente previa a la 1ª / posterior a la última, dentro del universo filtrado.
+                                                            </span>
+                                                            <button onClick={() => exportPersistDetailExcel(detail)}
+                                                                style={{padding: '8px 16px', borderRadius: '8px', border: 'none', background: '#1e8449', color: '#fff', fontWeight: 600, cursor: 'pointer', fontSize: '0.85em'}}>
+                                                                ⬇️ Exportar a Excel
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
+                                    </>
                                 )}
                             </>
                         )}
