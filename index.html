@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#1a5276">
-    <title>Dashboard analizador de dispensaciones IMID - V33</title>
+    <title>Dashboard analizador de dispensaciones IMID - V34</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -743,6 +743,8 @@
             // === Estados de PERSISTENCIA / Kaplan-Meier ===
             const [persistMode, setPersistMode] = useState('pa'); // 'pa' = principio activo | 'product' = presentación comercial
             const [persistStartDate, setPersistStartDate] = useState(''); // fecha de inicio del análisis (YYYY-MM-DD)
+            const [persistInclusionEnd, setPersistInclusionEnd] = useState(''); // fin de la ventana de inclusión (reclutamiento)
+            const [persistObsEnd, setPersistObsEnd] = useState('');       // fin de la ventana de observación
             const [persistSelected, setPersistSelected] = useState(new Set()); // medicamentos seleccionados
             const [persistSearch, setPersistSearch] = useState('');
             const [persistCohort, setPersistCohort] = useState('all'); // 'all' | 'naive' | 'noNaive'
@@ -1199,9 +1201,12 @@
             // =========================================================
             // ====  CÁLCULO DE PERSISTENCIA + KAPLAN-MEIER  ===========
             // =========================================================
-            const PERSIST_GAP_DAYS = 122;      // 4 meses (3 de tratamiento + 1 de margen). Gap mayor = abandono.
-            const PERSIST_WASHOUT_MONTHS = 4;  // período de lavado previo a la fecha de inicio
-            const PERSIST_CENSOR_DAYS = 75;    // si (últ. fecha tabla - últ. dispensación) < 75 días => censurado
+            const PERSIST_COVERAGE_DAYS = 91;   // suministro real por dispensación (≈ 3 meses de tratamiento)
+            const PERSIST_GRACE_DAYS = 31;      // margen de tolerancia para la reposición (≈ 1 mes)
+            const PERSIST_GAP_DAYS = PERSIST_COVERAGE_DAYS + PERSIST_GRACE_DAYS; // 122 días = gap permisible
+            const PERSIST_WASHOUT_MONTHS = 4;   // período de lavado previo (diseño incident/new-user)
+            const PERSIST_MIN_AT_RISK = 10;     // nº mínimo en riesgo para considerar fiable la cola de la curva
+            const PERSIST_Z = 1.96;             // z para IC 95%
 
             const MS_DAY = 1000 * 60 * 60 * 24;
             const daysBetween = (a, b) => Math.round((b.getTime() - a.getTime()) / MS_DAY);
@@ -1264,30 +1269,52 @@
                 )].sort();
             };
 
-            // Estimador Kaplan-Meier. Recibe array de {time, event} (event=1 abandono, 0 censura).
-            // Devuelve pasos {t, surv, atRisk, events} ordenados por tiempo.
+            // Estimador Kaplan-Meier con varianza de Greenwood, IC 95% (transformación log-log) y mediana.
+            // Recibe array de {time, event} (event=1 abandono, 0 censura administrativa).
             const kaplanMeier = (subjects) => {
+                const z = PERSIST_Z;
                 const valid = subjects.filter(s => s.time >= 0);
                 const n = valid.length;
-                if (n === 0) return { n: 0, steps: [{ t: 0, surv: 1, atRisk: 0, events: 0 }] };
-                // Tiempos de evento únicos ordenados
+                if (n === 0) return { n: 0, steps: [{ t: 0, surv: 1, atRisk: 0, events: 0, ciL: 1, ciU: 1 }], median: null, medianReached: false };
                 const eventTimes = [...new Set(valid.filter(s => s.event === 1).map(s => s.time))].sort((a, b) => a - b);
-                let surv = 1;
-                const steps = [{ t: 0, surv: 1, atRisk: n, events: 0 }];
+                let surv = 1, sumTerm = 0; // sumTerm = Σ d_i / (n_i (n_i - d_i)) para Greenwood
+                const steps = [{ t: 0, surv: 1, atRisk: n, events: 0, ciL: 1, ciU: 1 }];
                 eventTimes.forEach(t => {
-                    const atRisk = valid.filter(s => s.time >= t).length; // en riesgo justo antes de t
-                    const dEvents = valid.filter(s => s.event === 1 && s.time === t).length;
-                    if (atRisk > 0) surv = surv * (1 - dEvents / atRisk);
-                    steps.push({ t, surv, atRisk, events: dEvents });
+                    const atRisk = valid.filter(s => s.time >= t).length;        // en riesgo justo antes de t
+                    const d = valid.filter(s => s.event === 1 && s.time === t).length;
+                    if (atRisk > 0) {
+                        surv = surv * (1 - d / atRisk);
+                        if (atRisk - d > 0) sumTerm += d / (atRisk * (atRisk - d));
+                        else sumTerm = Infinity;
+                    }
+                    // IC 95% por transformación complementaria log-log (acota en [0,1])
+                    let ciL = surv, ciU = surv;
+                    if (surv > 0 && surv < 1 && isFinite(sumTerm) && sumTerm > 0) {
+                        const lnS = Math.log(surv);
+                        const seLL = Math.sqrt(sumTerm) / Math.abs(lnS); // se de ln(-ln S)
+                        const cll = Math.log(-lnS);
+                        ciU = Math.exp(-Math.exp(cll - z * seLL));
+                        ciL = Math.exp(-Math.exp(cll + z * seLL));
+                    } else if (surv <= 0) { ciL = 0; ciU = 0; }
+                    steps.push({ t, surv, atRisk, events: d, ciL, ciU });
                 });
-                return { n, steps, subjects: valid };
+                // Mediana de persistencia: primer t con S(t) <= 0.5
+                let median = null, medianReached = false;
+                for (const st of steps) { if (st.surv <= 0.5) { median = st.t; medianReached = true; break; } }
+                return { n, steps, subjects: valid, median, medianReached };
             };
 
-            // Probabilidad de supervivencia en un instante t (escalón previo)
+            // Probabilidad de supervivencia en un instante t (función escalón)
             const survAt = (steps, t) => {
                 let s = 1;
                 for (const step of steps) { if (step.t <= t) s = step.surv; else break; }
                 return s;
+            };
+            // Devuelve {surv, ciL, ciU} en el instante t (función escalón)
+            const ciAt = (steps, t) => {
+                let r = { surv: 1, ciL: 1, ciU: 1 };
+                for (const step of steps) { if (step.t <= t) r = { surv: step.surv, ciL: step.ciL, ciU: step.ciU }; else break; }
+                return r;
             };
 
             // Nº de sujetos aún en riesgo (no han tenido evento ni han sido censurados antes de t)
@@ -1313,6 +1340,18 @@
                     setPersistError(`La fecha de inicio debe ser, al menos, 4 meses posterior a la primera dispensación de la tabla. Fecha mínima permitida: ${minStart.toLocaleDateString('es-ES')}.`);
                     return;
                 }
+
+                // Fin de la ventana de observación (por defecto, última fecha de la tabla)
+                let obsEnd = persistObsEnd ? new Date(persistObsEnd + 'T23:59:59') : new Date(tableLast);
+                if (isNaN(obsEnd)) { setPersistError('Fecha de fin de observación no válida.'); return; }
+                if (obsEnd > tableLast) obsEnd = new Date(tableLast); // no hay datos más allá de la tabla
+
+                // Fin de la ventana de inclusión / reclutamiento (por defecto, fin de observación)
+                let inclusionEnd = persistInclusionEnd ? new Date(persistInclusionEnd + 'T23:59:59') : new Date(obsEnd);
+                if (isNaN(inclusionEnd)) { setPersistError('Fecha de fin de inclusión no válida.'); return; }
+
+                if (inclusionEnd < startDate) { setPersistError('El fin de la ventana de inclusión no puede ser anterior a la fecha de inicio.'); return; }
+                if (obsEnd < inclusionEnd) { setPersistError('El fin de la observación no puede ser anterior al fin de la inclusión.'); return; }
 
                 const f = persistField();
                 const meds = [...persistSelected];
@@ -1346,89 +1385,82 @@
 
                         const firstMed = medDisps[0]['Fecha Dispensación'];
                         const firstMedPathology = String(medDisps[0]['Patología'] || '').trim() || null; // patología de la 1ª dispensación
-                        // El inicio del medicamento debe caer dentro del período de estudio
+
+                        // VENTANA DE INCLUSIÓN: el inicio del medicamento debe caer en [startDate, inclusionEnd]
                         if (firstMed < startDate) return;
+                        if (firstMed > inclusionEnd) return;
 
-                        // Comprobar washout: no debe haber dispensaciones de ESTE medicamento antes de startDate
+                        // WASHOUT (diseño de nuevo usuario): no debe haber dispensaciones de ESTE medicamento antes de startDate
                         const medBeforeStart = medDisps.some(r => r['Fecha Dispensación'] < startDate);
-                        if (medBeforeStart) return; // no es un inicio "limpio"
+                        if (medBeforeStart) return;
 
-                        // ¿Naive? = sin NINGUNA dispensación (de cualquier medicamento) ANTES de la primera
-                        // dispensación del medicamento analizado. Coherente con "tratamiento anterior":
-                        // si existe algún tratamiento previo a firstMed, el paciente es NO naive.
+                        // NAIVE = sin NINGUNA dispensación (de cualquier medicamento) antes de firstMed (universo filtrado).
                         const dispsBefore = disps.filter(r => r['Fecha Dispensación'] < firstMed);
                         const isNaive = dispsBefore.length === 0;
-
-                        // Tratamientos previos (para no-naive): medicamentos distintos al seleccionado antes de firstMed
                         const prevTreatments = [...new Set(dispsBefore
                             .map(r => String(r[f] || '').trim())
                             .filter(v => v && v !== medUp))];
 
-                        // ---- Cálculo del tiempo de persistencia (en días desde firstMed) ----
-                        // Recorremos las dispensaciones del paciente DESDE firstMed.
-                        const fromStart = disps.filter(r => r['Fecha Dispensación'] >= firstMed);
-                        let lastMedDate = firstMed;
-                        let event = 0;
-                        let time = 0;
-                        let switched = false;
+                        // ---- Cálculo del tiempo de persistencia (días desde firstMed) ----
+                        // Solo se consideran dispensaciones hasta el FIN DE OBSERVACIÓN (corte administrativo).
+                        const medDates = medDisps
+                            .map(r => r['Fecha Dispensación'])
+                            .filter(d => d >= firstMed && d <= obsEnd);
+                        const lastMed = medDates[medDates.length - 1];
 
-                        // Detectar abandono por GAP en el medicamento seleccionado o por CAMBIO a otro fármaco
-                        const medDatesFromStart = fromStart
-                            .filter(r => String(r[f] || '').trim() === medUp)
-                            .map(r => r['Fecha Dispensación']);
-
-                        // Cambio de tratamiento: primera dispensación de OTRO medicamento posterior a firstMed
-                        const switchRec = fromStart
-                            .filter(r => String(r[f] || '').trim() !== medUp && r['Fecha Dispensación'] > firstMed)
+                        // Cambio de tratamiento: primera dispensación de OTRO medicamento en (firstMed, obsEnd]
+                        const switchRec = disps
+                            .filter(r => {
+                                const nm = String(r[f] || '').trim();
+                                return nm && nm !== medUp && r['Fecha Dispensación'] > firstMed && r['Fecha Dispensación'] <= obsEnd;
+                            })
                             .sort((a, b) => a['Fecha Dispensación'] - b['Fecha Dispensación'])[0] || null;
                         const switchDate = switchRec ? switchRec['Fecha Dispensación'] : null;
                         const switchMed = switchRec ? String(switchRec[f] || '').trim() : null;
 
-                        // Recorrer dispensaciones del medicamento buscando gap > umbral
-                        let gapEventDate = null;
-                        for (let i = 1; i < medDatesFromStart.length; i++) {
-                            const gap = daysBetween(medDatesFromStart[i - 1], medDatesFromStart[i]);
-                            if (gap > PERSIST_GAP_DAYS) {
-                                // abandono: el evento ocurre cuando expira la cobertura de la dispensación previa
-                                gapEventDate = new Date(medDatesFromStart[i - 1].getTime() + PERSIST_GAP_DAYS * MS_DAY);
+                        // Discontinuación por GAP. La fecha del evento es el fin de cobertura del último envase
+                        // antes del hueco (datación por suministro = última disp. + COBERTURA).
+                        let gapDiscontDate = null;
+                        for (let i = 1; i < medDates.length; i++) {
+                            if (daysBetween(medDates[i - 1], medDates[i]) > PERSIST_GAP_DAYS) {
+                                gapDiscontDate = new Date(medDates[i - 1].getTime() + PERSIST_COVERAGE_DAYS * MS_DAY);
                                 break;
                             }
                         }
-                        const lastMed = medDatesFromStart[medDatesFromStart.length - 1];
-
-                        // Determinar el desenlace más temprano entre: gap, cambio de tratamiento
-                        let eventDate = null;
-                        if (gapEventDate && switchDate) eventDate = gapEventDate < switchDate ? gapEventDate : switchDate;
-                        else eventDate = gapEventDate || switchDate;
-                        if (switchDate && (!gapEventDate || switchDate <= gapEventDate)) switched = true;
-
-                        let outcome = ''; // 'persist' | 'gap' | 'switch' | 'censored'
-                        if (eventDate) {
-                            // ABANDONO
-                            event = 1;
-                            time = Math.max(0, daysBetween(firstMed, eventDate));
-                            outcome = switched ? 'switch' : 'gap';
-                        } else {
-                            // No hay evento observado. ¿Se censura o se asume abandono al final de los datos?
-                            // Censura: si el seguimiento desde la última dispensación es corto (< 75 días) hasta el fin de tabla.
-                            const tailDays = daysBetween(lastMed, tableLast);
-                            if (tailDays < PERSIST_CENSOR_DAYS) {
-                                // Censurado: seguimiento insuficiente para afirmar abandono
-                                event = 0;
-                                time = Math.max(0, daysBetween(firstMed, lastMed));
-                                outcome = 'censored';
-                            } else {
-                                // Tiempo suficiente sin reposición => se considera abandono al expirar la cobertura
-                                event = 1;
-                                const expiry = new Date(lastMed.getTime() + PERSIST_GAP_DAYS * MS_DAY);
-                                const evDate = expiry < tableLast ? expiry : tableLast;
-                                time = Math.max(0, daysBetween(firstMed, evDate));
-                                outcome = 'gap';
+                        // Si no hubo hueco interno, evaluar la cola hasta el fin de observación:
+                        if (!gapDiscontDate) {
+                            const gapToEnd = daysBetween(lastMed, obsEnd);
+                            if (gapToEnd > PERSIST_GAP_DAYS) {
+                                // El gap desde la última dispensación supera el permisible => discontinuación
+                                gapDiscontDate = new Date(lastMed.getTime() + PERSIST_COVERAGE_DAYS * MS_DAY);
                             }
+                            // Si gapToEnd <= gap permisible => el paciente sigue dentro de ventana => se censurará en obsEnd
                         }
 
-                        // ---- Datos para el modal "Ver detalle" (fieles al historial dentro del universo filtrado) ----
-                        // Tratamiento INMEDIATAMENTE ANTERIOR: última dispensación de OTRO medicamento con fecha < firstMed
+                        // Fin de persistencia = el más temprano entre discontinuación por gap y cambio de tratamiento.
+                        // Si no hay ninguno => censura administrativa en el fin de observación (sigue en tratamiento).
+                        let event = 0, time = 0, outcome = 'censored';
+                        const candidates = [];
+                        if (gapDiscontDate) candidates.push({ date: gapDiscontDate, type: 'gap' });
+                        if (switchDate) candidates.push({ date: switchDate, type: 'switch' });
+                        candidates.sort((a, b) => a.date - b.date);
+
+                        if (candidates.length > 0) {
+                            const end = candidates[0];
+                            event = 1;
+                            time = Math.max(0, daysBetween(firstMed, end.date));
+                            outcome = end.type; // 'gap' | 'switch'
+                        } else {
+                            // Censura administrativa en el fin de observación (paciente persistente al cierre)
+                            event = 0;
+                            time = Math.max(0, daysBetween(firstMed, obsEnd));
+                            outcome = 'censored';
+                        }
+                        // Seguridad: el tiempo nunca puede exceder el seguimiento máximo disponible
+                        const maxFollow = Math.max(0, daysBetween(firstMed, obsEnd));
+                        if (time > maxFollow) { time = maxFollow; if (event === 1) { event = 0; outcome = 'censored'; } }
+
+                        // ---- Datos para el modal "Ver detalle" ----
                         let prevTreatment = null, prevTreatmentDate = null;
                         for (let i = disps.length - 1; i >= 0; i--) {
                             const r = disps[i];
@@ -1437,17 +1469,14 @@
                                 prevTreatment = name; prevTreatmentDate = r['Fecha Dispensación']; break;
                             }
                         }
-                        // Tratamiento INMEDIATAMENTE POSTERIOR: primera dispensación de OTRO medicamento con fecha > lastMed
                         let nextTreatment = null, nextTreatmentDate = null;
                         for (let i = 0; i < disps.length; i++) {
                             const r = disps[i];
                             const name = String(r[f] || '').trim();
-                            if (r['Fecha Dispensación'] > lastMed && name && name !== medUp) {
+                            if (r['Fecha Dispensación'] > lastMed && r['Fecha Dispensación'] <= obsEnd && name && name !== medUp) {
                                 nextTreatment = name; nextTreatmentDate = r['Fecha Dispensación']; break;
                             }
                         }
-                        // Si el desenlace fue un CAMBIO de tratamiento, el medicamento al que cambia
-                        // es el que causó el evento (puede ser anterior a lastMed si hubo solapamiento).
                         if (outcome === 'switch' && switchMed) {
                             nextTreatment = switchMed; nextTreatmentDate = switchDate;
                         }
@@ -1514,17 +1543,20 @@
                 const timePoints = [];
                 for (let i = 0; i <= nPoints; i++) timePoints.push({ idx: i, t: Math.round(i * stepDays), label: i === 0 ? '0' : labelFn(i) });
 
-                // Tabla n y % por punto para cada medicamento
+                // Tabla n y % por punto para cada medicamento (con IC 95%)
                 perMed.forEach(m => {
                     m.points = timePoints.map(tp => {
-                        const surv = survAt(m.km.steps, tp.t);
+                        const c = ciAt(m.km.steps, tp.t);
                         const atRisk = atRiskAt(m.subjects, tp.t);
                         return {
                             label: tp.label,
                             t: tp.t,
-                            pct: Math.round(surv * 1000) / 10,    // % con 1 decimal
-                            nPersist: Math.round(surv * m.cohortN), // aproximación de pacientes persistentes
-                            atRisk
+                            pct: Math.round(c.surv * 1000) / 10,    // % con 1 decimal
+                            ciL: Math.round(c.ciL * 1000) / 10,
+                            ciU: Math.round(c.ciU * 1000) / 10,
+                            nPersist: Math.round(c.surv * m.cohortN), // estimación S(t)×N
+                            atRisk,
+                            reliable: atRisk >= PERSIST_MIN_AT_RISK
                         };
                     });
                 });
@@ -1538,8 +1570,14 @@
                     service: persistService,
                     pathology: persistPathology,
                     startDate,
+                    inclusionEnd,
+                    obsEnd,
                     minStart,
                     tableLast,
+                    coverageDays: PERSIST_COVERAGE_DAYS,
+                    graceDays: PERSIST_GRACE_DAYS,
+                    gapDays: PERSIST_GAP_DAYS,
+                    minAtRisk: PERSIST_MIN_AT_RISK,
                     generatedAt: new Date()
                 });
             };
@@ -1553,40 +1591,56 @@
                 if (window.kmChartInstance) { window.kmChartInstance.destroy(); }
 
                 const palette = ['#2980b9', '#e74c3c', '#27ae60', '#f39c12', '#8e44ad', '#16a085', '#d35400', '#2c3e50', '#c0392b', '#7f8c8d'];
+                const hexToRgba = (hex, a) => {
+                    const h = hex.replace('#', '');
+                    const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+                    return `rgba(${r},${g},${b},${a})`;
+                };
+                const single = persistResults.perMed.length === 1;
+                const minAtRisk = persistResults.minAtRisk;
+                const datasets = [];
 
-                const datasets = persistResults.perMed.map((m, idx) => {
+                persistResults.perMed.forEach((m, idx) => {
                     const color = palette[idx % palette.length];
-                    // Construir puntos escalonados a partir de los steps KM
-                    const dataPts = persistResults.timePoints.map(tp => ({
-                        x: tp.idx,
-                        y: Math.round(survAt(m.km.steps, tp.t) * 1000) / 10
-                    }));
-                    return {
+                    const atRiskArr = persistResults.timePoints.map(tp => atRiskAt(m.subjects, tp.t));
+                    const survPts = persistResults.timePoints.map(tp => Math.round(survAt(m.km.steps, tp.t) * 1000) / 10);
+
+                    // Banda IC 95% (solo si se compara un único medicamento, para no saturar)
+                    if (single) {
+                        const ciUpper = persistResults.timePoints.map(tp => Math.round(ciAt(m.km.steps, tp.t).ciU * 1000) / 10);
+                        const ciLower = persistResults.timePoints.map(tp => Math.round(ciAt(m.km.steps, tp.t).ciL * 1000) / 10);
+                        datasets.push({
+                            label: 'IC 95% (sup)', data: ciUpper, borderColor: 'transparent', backgroundColor: 'transparent',
+                            stepped: true, pointRadius: 0, fill: false, order: 3
+                        });
+                        datasets.push({
+                            label: 'IC 95%', data: ciLower, borderColor: 'transparent', backgroundColor: hexToRgba(color, 0.15),
+                            stepped: true, pointRadius: 0, fill: '-1', order: 3
+                        });
+                    }
+
+                    datasets.push({
                         label: `${m.med.length > 28 ? m.med.slice(0, 28) + '…' : m.med} (n=${m.cohortN})`,
-                        data: dataPts,
-                        borderColor: color,
-                        backgroundColor: color,
-                        stepped: true,
-                        fill: false,
-                        tension: 0,
-                        pointRadius: 2,
-                        borderWidth: 2.5
-                    };
+                        data: survPts,
+                        borderColor: color, backgroundColor: color,
+                        stepped: true, fill: false, tension: 0, pointRadius: 2, borderWidth: 2.5, order: 1,
+                        // Cola en discontinuo donde el nº en riesgo cae por debajo del umbral de fiabilidad
+                        segment: {
+                            borderDash: (ctx) => (atRiskArr[ctx.p1DataIndex] < minAtRisk ? [6, 4] : undefined)
+                        }
+                    });
                 });
 
                 window.kmChartInstance = new Chart(canvas, {
                     type: 'line',
-                    data: {
-                        labels: persistResults.timePoints.map(tp => tp.label),
-                        datasets
-                    },
+                    data: { labels: persistResults.timePoints.map(tp => tp.label), datasets },
                     options: {
                         responsive: true,
                         maintainAspectRatio: false,
                         interaction: { mode: 'index', intersect: false },
                         plugins: {
-                            title: { display: true, text: 'Curva de persistencia (Kaplan-Meier)', font: { size: 16, weight: 'bold' }, color: '#1B4354' },
-                            legend: { position: 'bottom', labels: { boxWidth: 18, font: { size: 11 } } },
+                            title: { display: true, text: 'Curva de persistencia (Kaplan-Meier, IC 95%)', font: { size: 16, weight: 'bold' }, color: '#1B4354' },
+                            legend: { position: 'bottom', labels: { boxWidth: 18, font: { size: 11 }, filter: (it) => it.text !== 'IC 95% (sup)' && it.text !== 'IC 95%' } },
                             tooltip: { callbacks: { label: (c) => `${c.dataset.label.split(' (n=')[0]}: ${c.parsed.y}%` } }
                         },
                         scales: {
@@ -2071,7 +2125,48 @@
                     })
                 };
             };
-            
+
+            // Calcula penetración de biosimilares agrupada por período genérico (años, trimestres o meses)
+            const calculateBiosimilarPenetrationByGranularity = (dataToProcess, granularity) => {
+                const BIOSIMILAR_TO_PA = {
+                    'HYRIMOZ': 'ADALIMUMAB', 'IMRALDI': 'ADALIMUMAB', 'IDACIO': 'ADALIMUMAB', 'YUFLIMA': 'ADALIMUMAB',
+                    'BENEPALI': 'ETANERCEPT', 'ERELZI': 'ETANERCEPT',
+                    'REMSIMA': 'INFLIXIMAB',
+                    'TYENNE': 'TOCILIZUMAB', 'AVTOZMA': 'TOCILIZUMAB',
+                    'UZPRUVO': 'USTEKINUMAB', 'STEQEYMA': 'USTEKINUMAB', 'PYZCHYVA': 'USTEKINUMAB',
+                    'OMLYCLO': 'OMALIZUMAB', 'GOBIVAZ': 'GOLIMUMAB'
+                };
+                const PA_WITH_BIOSIMILAR = ['ADALIMUMAB','ETANERCEPT','INFLIXIMAB','TOCILIZUMAB','USTEKINUMAB','OMALIZUMAB','GOLIMUMAB'];
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Descripción Producto Dispensado'] &&
+                    row['Id'] && row['Descripción Principio Activo']
+                );
+                const periodData = {};
+                validData.forEach(row => {
+                    const d = row['Fecha Dispensación'];
+                    let p;
+                    if (granularity === 'quarters') p = `${d.getFullYear()}-Q${Math.floor(d.getMonth()/3)+1}`;
+                    else if (granularity === 'months') p = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+                    else p = String(d.getFullYear());
+                    const pa = row['Descripción Principio Activo'].toUpperCase();
+                    const paHasBiosimilar = PA_WITH_BIOSIMILAR.some(b => pa.includes(b));
+                    if (!paHasBiosimilar) return;
+                    if (!periodData[p]) periodData[p] = { total: new Set(), bio: new Set() };
+                    periodData[p].total.add(row['Id']);
+                    const prod = row['Descripción Producto Dispensado'].toUpperCase();
+                    if (BIOSIMILARES.some(b => prod.includes(b))) periodData[p].bio.add(row['Id']);
+                });
+                const periods = Object.keys(periodData).sort();
+                return {
+                    periods,
+                    percentages: periods.map(p => {
+                        const total = periodData[p].total.size;
+                        const bio = periodData[p].bio.size;
+                        return total > 0 ? (bio / total * 100).toFixed(1) : '0.0';
+                    })
+                };
+            };
+
             const calculateServiceDistribution = (dataToProcess) => {
                 console.log('🔍 Calculando distribución');
                 console.log('Total filas:', dataToProcess.length);
@@ -2826,7 +2921,7 @@
                 if (persistResults.service) filtrosTxt.push(`Servicio: ${persistResults.service}`);
                 if (persistResults.pathology) filtrosTxt.push(`Patología: ${persistResults.pathology}`);
                 const hasFilters = filtrosTxt.length > 0;
-                const bannerH = hasFilters ? 28 : 22;
+                const bannerH = hasFilters ? 34 : 28;
 
                 pdf.setFillColor(...C_PRIM);
                 pdf.roundedRect(M, y, contentW, bannerH, 3, 3, 'F');
@@ -2836,13 +2931,12 @@
                 pdf.setFontSize(8); pdf.setFont('helvetica', 'normal');
                 pdf.text(`Trabajando con: ${modoTxt}`, M + 4, y + 12);
                 pdf.text(`Población: ${cohorteTxt}     ·     Granularidad: ${granTxt}`, M + 4, y + 17);
-                pdf.text(`Inicio del análisis: ${persistResults.startDate.toLocaleDateString('es-ES')}`, pageWidth - M - 4, y + 12, { align: 'right' });
-                pdf.text(`Fin de datos: ${persistResults.tableLast.toLocaleDateString('es-ES')}`, pageWidth - M - 4, y + 17, { align: 'right' });
+                pdf.text(`Ventana: inicio ${persistResults.startDate.toLocaleDateString('es-ES')}  ·  fin inclusión ${persistResults.inclusionEnd.toLocaleDateString('es-ES')}  ·  fin observación ${persistResults.obsEnd.toLocaleDateString('es-ES')}`, M + 4, y + 22);
                 if (hasFilters) {
                     pdf.setFont('helvetica', 'bold');
-                    pdf.text(`Filtros aplicados:`, M + 4, y + 23);
+                    pdf.text(`Filtros aplicados:`, M + 4, y + 28);
                     pdf.setFont('helvetica', 'normal');
-                    pdf.text(filtrosTxt.join('     ·     '), M + 32, y + 23);
+                    pdf.text(filtrosTxt.join('     ·     '), M + 32, y + 28);
                 }
                 y += bannerH + 6;
 
@@ -2910,6 +3004,9 @@
                     if (persistResults.cohort === 'all') {
                         resumenLines.push(`Naive: ${m.naiveN} (${m.totalAll ? ((m.naiveN / m.totalAll) * 100).toFixed(1) : 0}%)   ·   No naive: ${m.noNaiveN} (${m.totalAll ? ((m.noNaiveN / m.totalAll) * 100).toFixed(1) : 0}%)`);
                     }
+                    resumenLines.push(m.km.medianReached
+                        ? `Mediana de persistencia: ${m.km.median} días (~${(m.km.median / 30.4375).toFixed(1)} meses)`
+                        : `Mediana de persistencia: no alcanzada (no baja del 50% en el periodo observado)`);
                     const boxH = 6 + resumenLines.length * 5;
                     pdf.setFillColor(...C_GREY_BG);
                     pdf.roundedRect(M, y, contentW, boxH, 2, 2, 'F');
@@ -2952,32 +3049,34 @@
                     y += 6;
                     pdf.setFillColor(...C_PRIM); pdf.rect(M, y, contentW, 6, 'F');
                     pdf.setTextColor(255, 255, 255); pdf.setFontSize(7);
-                    const col2 = M + contentW * 0.40, col3 = M + contentW * 0.65, col4 = M + contentW - 2;
+                    const col2 = M + contentW * 0.30, col3 = M + contentW * 0.50, col4 = M + contentW * 0.70, col5 = M + contentW - 2;
                     pdf.text('Tiempo', M + 2, y + 4);
                     pdf.text('En riesgo', col2, y + 4, { align: 'right' });
-                    pdf.text('Persistentes (n)', col3, y + 4, { align: 'right' });
+                    pdf.text('Persist. (est.)', col3, y + 4, { align: 'right' });
                     pdf.text('Persistencia (%)', col4, y + 4, { align: 'right' });
+                    pdf.text('IC 95%', col5, y + 4, { align: 'right' });
                     y += 6;
                     pdf.setFont('helvetica', 'normal');
                     m.points.forEach((p, i) => {
                         y = ensureSpace(y, 6);
                         if (i % 2 === 0) { pdf.setFillColor(248, 250, 252); pdf.rect(M, y, contentW, 5, 'F'); }
-                        pdf.setTextColor(60, 60, 60);
-                        pdf.text(String(p.label), M + 2, y + 3.5);
+                        pdf.setTextColor(p.reliable ? 60 : 200, p.reliable ? 60 : 120, p.reliable ? 60 : 40);
+                        pdf.text(String(p.label) + (p.reliable ? '' : ' *'), M + 2, y + 3.5);
                         pdf.text(String(p.atRisk), col2, y + 3.5, { align: 'right' });
                         pdf.text(String(p.nPersist), col3, y + 3.5, { align: 'right' });
                         pdf.setFont('helvetica', 'bold');
                         pdf.text(`${p.pct}%`, col4, y + 3.5, { align: 'right' });
                         pdf.setFont('helvetica', 'normal');
+                        pdf.text(`${p.ciL}–${p.ciU}`, col5, y + 3.5, { align: 'right' });
                         y += 5;
                     });
                     y += 8;
                 });
 
                 // ── Nota metodológica ──
-                y = ensureSpace(y, 22);
+                y = ensureSpace(y, 28);
                 pdf.setFontSize(6.5); pdf.setFont('helvetica', 'italic'); pdf.setTextColor(...C_TEXT_SOFT);
-                const nota = 'Definiciones: abandono = ausencia de reposición durante más de 4 meses (122 días) desde la cobertura esperada, o cambio a otro medicamento. Censura = pacientes cuyo seguimiento desde la última dispensación hasta el fin de la tabla es inferior a 75 días. Curva estimada por el método de Kaplan-Meier. Cada medicamento se analiza de forma independiente.';
+                const nota = `Metodología: diseño de nuevo usuario con lavado de 4 meses previo al inicio. Solo se incluyen pacientes que inician el tratamiento dentro de la ventana de inclusión. Persistencia estimada por Kaplan-Meier. Fin de persistencia (evento) = discontinuación por falta de reposición (hueco entre dispensaciones > ${persistResults.gapDays} días = ${persistResults.coverageDays} de cobertura + ${persistResults.graceDays} de margen), fechado al agotarse la cobertura del último envase; o cambio a otro medicamento, lo que ocurra antes. Censura administrativa en el fin de observación para quienes siguen en tratamiento. IC 95% por transformación log-log (varianza de Greenwood). (*) = menos de ${persistResults.minAtRisk} pacientes en riesgo: estimación poco fiable. "Persist. (est.)" = S(t) × n. Cada medicamento se analiza de forma independiente.`;
                 const notaLines = pdf.splitTextToSize(nota, contentW);
                 pdf.text(notaLines, M, y + 3);
 
@@ -2990,7 +3089,7 @@
             const exportPersistDetailExcel = (detail) => {
                 if (!detail || !detail.subjects) return;
                 const fmt = (d) => (d instanceof Date && !isNaN(d)) ? d.toLocaleDateString('es-ES') : '';
-                const outcomeLabel = { persist: 'Persiste', gap: 'Abandono (gap)', switch: 'Cambio de tratamiento', censored: 'Censurado' };
+                const outcomeLabel = { gap: 'Discontinuación (falta de reposición)', switch: 'Cambio de tratamiento', censored: 'En tratamiento al cierre (censurado)' };
                 const rows = [...detail.subjects].sort((a, b) => a.firstDate - b.firstDate).map(s => ({
                     'Id paciente': s.id,
                     'Tipo': s.naive ? 'Naive' : 'No naive',
@@ -3027,9 +3126,18 @@
                 const fecha = new Date().toLocaleDateString('es-ES', {
                     year: 'numeric', month: 'long', day: 'numeric'
                 });
+                const validDates_r1 = dataToProcess.map(r => r['Fecha Dispensación']).filter(d => d instanceof Date && !isNaN(d));
+                const minDate_r1 = validDates_r1.length > 0 ? new Date(Math.min(...validDates_r1.map(d => d.getTime()))) : null;
+                const maxDate_r1 = validDates_r1.length > 0 ? new Date(Math.max(...validDates_r1.map(d => d.getTime()))) : null;
+                const fmtDateR1 = d => d ? d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
                 pdf.setFontSize(9);
                 pdf.setFont('helvetica', 'normal');
                 pdf.text(`Fecha del informe: ${fecha}`, margin, 32);
+                if (minDate_r1 && maxDate_r1) {
+                    pdf.setFontSize(8);
+                    pdf.setTextColor(80, 80, 80);
+                    pdf.text(`Intervalo de dispensaciones: ${fmtDateR1(minDate_r1)} – ${fmtDateR1(maxDate_r1)}`, margin, 36);
+                }
 
                 // Filtros
                 let yPos = 37;
@@ -3377,9 +3485,18 @@
                 const fecha = new Date().toLocaleDateString('es-ES', {
                     year: 'numeric', month: 'long', day: 'numeric'
                 });
+                const validDates_r2 = dataToProcess.map(r => r['Fecha Dispensación']).filter(d => d instanceof Date && !isNaN(d));
+                const minDate_r2 = validDates_r2.length > 0 ? new Date(Math.min(...validDates_r2.map(d => d.getTime()))) : null;
+                const maxDate_r2 = validDates_r2.length > 0 ? new Date(Math.max(...validDates_r2.map(d => d.getTime()))) : null;
+                const fmtDateR2 = d => d ? d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
                 pdf.setFontSize(9);
                 pdf.setFont('helvetica', 'normal');
                 pdf.text(`Fecha del informe: ${fecha}`, margin, 32);
+                if (minDate_r2 && maxDate_r2) {
+                    pdf.setFontSize(8);
+                    pdf.setTextColor(80, 80, 80);
+                    pdf.text(`Intervalo de dispensaciones: ${fmtDateR2(minDate_r2)} – ${fmtDateR2(maxDate_r2)}`, margin, 36);
+                }
 
                 // Filtros
                 let yPos = 37;
@@ -3725,9 +3842,18 @@
                 const fecha = new Date().toLocaleDateString('es-ES', {
                     year: 'numeric', month: 'long', day: 'numeric'
                 });
+                const validDates_r3 = dataToProcess.map(r => r['Fecha Dispensación']).filter(d => d instanceof Date && !isNaN(d));
+                const minDate_r3 = validDates_r3.length > 0 ? new Date(Math.min(...validDates_r3.map(d => d.getTime()))) : null;
+                const maxDate_r3 = validDates_r3.length > 0 ? new Date(Math.max(...validDates_r3.map(d => d.getTime()))) : null;
+                const fmtDateR3 = d => d ? d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
                 pdf.setFontSize(9);
                 pdf.setFont('helvetica', 'normal');
                 pdf.text(`Fecha del informe: ${fecha}`, margin, 32);
+                if (minDate_r3 && maxDate_r3) {
+                    pdf.setFontSize(8);
+                    pdf.setTextColor(80, 80, 80);
+                    pdf.text(`Intervalo de dispensaciones: ${fmtDateR3(minDate_r3)} – ${fmtDateR3(maxDate_r3)}`, margin, 36);
+                }
 
                 // Filtros
                 let yPos = 37;
@@ -4113,8 +4239,12 @@
                 const fecha = new Date().toLocaleDateString('es-ES', {
                     year: 'numeric', month: 'long', day: 'numeric'
                 });
-
-                // ===== HELPERS DE DIBUJO =====
+                // Intervalo de fechas real de las dispensaciones
+                const validDates_de = dataToProcess.map(r => r['Fecha Dispensación']).filter(d => d instanceof Date && !isNaN(d));
+                const minDate_de = validDates_de.length > 0 ? new Date(Math.min(...validDates_de.map(d => d.getTime()))) : null;
+                const maxDate_de = validDates_de.length > 0 ? new Date(Math.max(...validDates_de.map(d => d.getTime()))) : null;
+                const fmtDateDe = d => d ? d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+                const dateRangeTxt = minDate_de && maxDate_de ? `${fmtDateDe(minDate_de)} – ${fmtDateDe(maxDate_de)}` : '';
                 const setFill = c => pdf.setFillColor(c[0], c[1], c[2]);
                 const setText = c => pdf.setTextColor(c[0], c[1], c[2]);
                 const setDraw = c => pdf.setDrawColor(c[0], c[1], c[2]);
@@ -4204,12 +4334,17 @@
                 pdf.setFontSize(8.5);
                 setText(COLOR.muted);
                 pdf.text(`Generado el ${fecha}  ·  Hospital Universitari i Politècnic La Fe`, M, 84);
+                if (dateRangeTxt) {
+                    pdf.setFontSize(7.5);
+                    setText([160, 175, 200]);
+                    pdf.text(`Dispensaciones: ${dateRangeTxt}`, M, 88);
+                }
 
                 if (activeFilters.length > 0) {
                     pdf.setFontSize(7.5);
                     setText([180, 190, 210]);
                     const filtersTxt = 'Filtros: ' + activeFilters.join(' · ');
-                    pdf.text(filtersTxt.length > 110 ? filtersTxt.substring(0, 110) + '…' : filtersTxt, M, 89);
+                    pdf.text(filtersTxt.length > 110 ? filtersTxt.substring(0, 110) + '…' : filtersTxt, M, 92);
                 }
 
                 // === Hero KPIs (4 tarjetas grandes) ===
@@ -5038,6 +5173,12 @@
                 const fecha = new Date().toLocaleDateString('es-ES', {
                     year: 'numeric', month: 'long', day: 'numeric'
                 });
+                // Intervalo de fechas real de las dispensaciones
+                const validDates_dc = dataToProcess.map(r => r['Fecha Dispensación']).filter(d => d instanceof Date && !isNaN(d));
+                const minDate_dc = validDates_dc.length > 0 ? new Date(Math.min(...validDates_dc.map(d => d.getTime()))) : null;
+                const maxDate_dc = validDates_dc.length > 0 ? new Date(Math.max(...validDates_dc.map(d => d.getTime()))) : null;
+                const fmtDateDc = d => d ? d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+                const dateRangeTxt = minDate_dc && maxDate_dc ? `${fmtDateDc(minDate_dc)} – ${fmtDateDc(maxDate_dc)}` : '';
 
                 const activeFilters = [];
                 if (filters.year) activeFilters.push(`Año ${filters.year}`);
@@ -5045,9 +5186,6 @@
                 if (filters.pathology) activeFilters.push(filters.pathology);
                 if (filters.activeIngredient) activeFilters.push(filters.activeIngredient);
                 if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`${selectedPASet.size} PA`);
-
-                // Deltas
-                const lastY = yearData.data.length > 0 ? yearData.data[yearData.data.length - 1] : null;
                 const prevY = yearData.data.length > 1 ? yearData.data[yearData.data.length - 2] : null;
                 const calcDelta = (curr, prev) => (prev > 0 ? ((curr - prev) / prev * 100) : null);
                 const deltaPacientes = lastY && prevY ? calcDelta(lastY.Pacientes, prevY.Pacientes) : null;
@@ -5081,13 +5219,20 @@
                 pdf.setFont('helvetica', 'normal');
                 pdf.setFontSize(6.5);
                 setText([200, 215, 222]);
-                pdf.text('PERIODO', PAGE_W - M - 56, 6.5);
+                pdf.text('PERIODO', PAGE_W - M - 80, 6.5);
+                pdf.text('DISPENSACIONES', PAGE_W - M - 38, 6.5);
                 pdf.text('FECHA', PAGE_W - M, 6.5, { align: 'right' });
                 pdf.setFont('helvetica', 'bold');
                 pdf.setFontSize(9);
                 setText([255, 255, 255]);
-                pdf.text(periodoTxt, PAGE_W - M - 56, 10.5);
+                pdf.text(periodoTxt, PAGE_W - M - 80, 10.5);
+                pdf.setFont('helvetica', 'normal');
+                pdf.setFontSize(7.5);
+                setText([200, 215, 222]);
+                if (dateRangeTxt) pdf.text(dateRangeTxt, PAGE_W - M - 38, 10.5);
+                pdf.setFont('helvetica', 'bold');
                 pdf.setFontSize(8);
+                setText([255, 255, 255]);
                 pdf.text(fecha, PAGE_W - M, 10.5, { align: 'right' });
                 if (activeFilters.length > 0) {
                     pdf.setFont('helvetica', 'normal');
@@ -5797,6 +5942,8 @@
                 const periodData = GRAN.calcByPeriod(dataToProcess);
                 const topPA = calculateTopPrincipiosActivos(dataToProcess, 8);
                 const biosimData = calculateBiosimilarPenetration(dataToProcess);
+                // Datos de penetración de biosimilares agrupados por la granularidad del informe
+                const biosimByPeriod = calculateBiosimilarPenetrationByGranularity(dataToProcess, granularity);
                 const cpData = GRAN.calcCostPP(dataToProcess);
                 const paData = GRAN.calcPA(dataToProcess);
                 const bioData = GRAN.calcBio(dataToProcess);
@@ -5811,6 +5958,13 @@
                     ? allPeriods.slice(-GRAN.maxCols)
                     : allPeriods;
                 const tableTruncated = allPeriods.length > GRAN.maxCols;
+
+                // Intervalo de fechas real de las dispensaciones
+                const validDates = dataToProcess.map(r => r['Fecha Dispensación']).filter(d => d instanceof Date && !isNaN(d));
+                const minDate = validDates.length > 0 ? new Date(Math.min(...validDates.map(d => d.getTime()))) : null;
+                const maxDate = validDates.length > 0 ? new Date(Math.max(...validDates.map(d => d.getTime()))) : null;
+                const fmtDate = d => d ? d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+                const dateRangeTxt = minDate && maxDate ? `${fmtDate(minDate)} – ${fmtDate(maxDate)}` : '';
 
                 // Periodo descripción y filtros
                 let periodoTxt = 'Todos los datos';
@@ -5883,9 +6037,15 @@
                 pdf.setFontSize(8);
                 setText([180, 195, 205]);
                 pdf.text(`Generado el ${fecha}`, M, 67);
+                if (dateRangeTxt) {
+                    pdf.setFontSize(7.5);
+                    setText([160, 180, 195]);
+                    pdf.text(`Dispensaciones: ${dateRangeTxt}`, M, 71);
+                }
                 if (activeFilters.length > 0) {
                     const ftxt = 'Filtros: ' + activeFilters.join(' · ');
-                    pdf.text(ftxt.length > 80 ? ftxt.substring(0, 80) + '…' : ftxt, M, 70.5);
+                    pdf.setFontSize(7.5);
+                    pdf.text(ftxt.length > 80 ? ftxt.substring(0, 80) + '…' : ftxt, M, 74);
                 }
 
                 // KPIs hero
@@ -5954,9 +6114,11 @@
                     bullets.push(`${sign.charAt(0).toUpperCase() + sign.slice(1)} del ${Math.abs(deltaPacientes).toFixed(1).replace('.', ',')}% en pacientes (último ${granularity === 'months' ? 'mes' : granularity === 'quarters' ? 'trimestre' : 'año'} vs anterior).`);
                 }
                 if (topPA[0]) bullets.push(`Principio activo más prescrito: ${topPA[0].name} (${fmtInt(topPA[0].pacientes)} pacientes).`);
-                const lastBioPct = biosimData.percentages && biosimData.percentages.length > 0
-                    ? parseFloat(biosimData.percentages[biosimData.percentages.length - 1]) : 0;
-                bullets.push(`Penetración actual de biosimilares: ${lastBioPct.toFixed(1).replace('.', ',')}%.`);
+                const lastBioPct = biosimByPeriod.percentages && biosimByPeriod.percentages.length > 0
+                    ? parseFloat(biosimByPeriod.percentages[biosimByPeriod.percentages.length - 1]) : 0;
+                const lastBioPeriod = biosimByPeriod.periods && biosimByPeriod.periods.length > 0
+                    ? GRAN.shortLabel(biosimByPeriod.periods[biosimByPeriod.periods.length - 1]) : '';
+                bullets.push(`Penetración de biosimilares en el último período (${lastBioPeriod}): ${lastBioPct.toFixed(1).replace('.', ',')}%.`);
 
                 bullets.forEach((b, i) => {
                     setFill(COLOR.accent);
@@ -6359,7 +6521,7 @@
                 pdf.text('Penetración de biosimilares sobre principios activos con alternativa disponible.', M + 20, y + 5);
                 y += 16;
 
-                // La penetración siempre por año (más legible)
+                // La penetración agrupada por la granularidad del informe
                 const heroW = 75;
                 const heroH = 55;
                 setFill(COLOR.petrolDk);
@@ -6369,7 +6531,8 @@
                 pdf.setFont('helvetica', 'normal');
                 pdf.setFontSize(8);
                 setText(COLOR.green);
-                pdf.text(`PENETRACIÓN ACTUAL`, M + 5, y + 9);
+                const heroLastPeriodLabel = lastBioPeriod ? `ÚLTIMO ${granularity === 'months' ? 'MES' : granularity === 'quarters' ? 'TRIMESTRE' : 'AÑO'}: ${lastBioPeriod}` : 'PENETRACIÓN ACTUAL';
+                pdf.text(heroLastPeriodLabel, M + 5, y + 9);
 
                 pdf.setFont('helvetica', 'bold');
                 setText([255, 255, 255]);
@@ -6381,8 +6544,10 @@
                 setText([200, 210, 230]);
                 pdf.text('%', M + 5 + bigBioW + 2, y + 30);
 
-                const prevBioPct = biosimData.percentages && biosimData.percentages.length > 1
-                    ? parseFloat(biosimData.percentages[biosimData.percentages.length - 2]) : null;
+                const prevBioPct = biosimByPeriod.percentages && biosimByPeriod.percentages.length > 1
+                    ? parseFloat(biosimByPeriod.percentages[biosimByPeriod.percentages.length - 2]) : null;
+                const prevBioPeriodLabel = biosimByPeriod.periods && biosimByPeriod.periods.length > 1
+                    ? GRAN.shortLabel(biosimByPeriod.periods[biosimByPeriod.periods.length - 2]) : '';
                 const deltaBio = prevBioPct !== null ? (lastBioPct - prevBioPct) : null;
                 if (deltaBio !== null) {
                     const isUp = deltaBio > 0;
@@ -6394,7 +6559,8 @@
                     setText([180, 195, 210]);
                     pdf.setFont('helvetica', 'normal');
                     pdf.setFontSize(8);
-                    pdf.text('vs año anterior', M + 9, y + 44);
+                    const vsLabel = prevBioPeriodLabel ? `vs ${prevBioPeriodLabel}` : `vs ${granularity === 'months' ? 'mes' : granularity === 'quarters' ? 'trim.' : 'año'} ant.`;
+                    pdf.text(vsLabel, M + 9, y + 44);
                 }
                 setText([180, 195, 210]);
                 pdf.setFont('helvetica', 'normal');
@@ -6407,21 +6573,23 @@
                 pdf.setFont('helvetica', 'bold');
                 pdf.setFontSize(10);
                 setText(COLOR.ink);
-                pdf.text('Penetración anual', evX, y + 5);
+                const chartBioTitle = granularity === 'years' ? 'Penetración anual' : granularity === 'quarters' ? 'Penetración trimestral' : 'Penetración mensual';
+                pdf.text(chartBioTitle, evX, y + 5);
                 pdf.setFont('helvetica', 'normal');
                 pdf.setFontSize(8);
                 setText(COLOR.muted);
-                pdf.text('Evolución del % de pacientes con biosimilar disponible', evX, y + 9);
+                pdf.text(GRAN.biosimDesc, evX, y + 9);
 
                 const c5 = document.createElement('canvas');
                 c5.width = 1100; c5.height = 580;
                 tempDiv.appendChild(c5);
+                const biosimChartLabels = biosimByPeriod.periods.map(p => GRAN.shortLabel(p));
                 const ch5 = new Chart(c5, {
                     type: 'bar',
                     data: {
-                        labels: biosimData.years,
+                        labels: biosimChartLabels,
                         datasets: [{
-                            data: biosimData.percentages.map(v => parseFloat(v)),
+                            data: biosimByPeriod.percentages.map(v => parseFloat(v)),
                             backgroundColor: 'rgba(16, 168, 122, 0.92)',
                             borderRadius: 4, borderSkipped: false
                         }]
@@ -6431,7 +6599,7 @@
                         plugins: { legend: { display: false }, tooltip: { enabled: false } },
                         scales: {
                             y: { beginAtZero: true, max: 100, grid: { color: 'rgba(226,232,240,0.7)', drawBorder: false }, ticks: { color: '#94a3b8', font: { size: 18 }, callback: v => v + '%' } },
-                            x: { grid: { display: false, drawBorder: false }, ticks: { color: '#475569', font: { size: 20, weight: '600' } } }
+                            x: { grid: { display: false, drawBorder: false }, ticks: { color: '#475569', font: { size: granularity === 'months' ? 12 : 20, weight: '600' }, maxRotation: granularity === 'months' ? 45 : 0 } }
                         }
                     }
                 });
@@ -6816,10 +6984,18 @@
                 const evolutionData = calculateEvolutionByYear(dataToProcess);   // para hero anual
                 const topPA = calculateTopPrincipiosActivos(dataToProcess, 5);
                 const biosimData = calculateBiosimilarPenetration(dataToProcess);
+                const biosimByPeriod = calculateBiosimilarPenetrationByGranularity(dataToProcess, granularity);
                 const cpData = GRAN.calcCostPP(dataToProcess);
 
                 const allPeriods = periodData.data.map(r => r.Periodo);
                 const chartLabels = allPeriods.map(p => GRAN.shortLabel(p));
+
+                // Intervalo de fechas real de las dispensaciones
+                const validDates = dataToProcess.map(r => r['Fecha Dispensación']).filter(d => d instanceof Date && !isNaN(d));
+                const minDate = validDates.length > 0 ? new Date(Math.min(...validDates.map(d => d.getTime()))) : null;
+                const maxDate = validDates.length > 0 ? new Date(Math.max(...validDates.map(d => d.getTime()))) : null;
+                const fmtDate = d => d ? d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+                const dateRangeTxt = minDate && maxDate ? `${fmtDate(minDate)} – ${fmtDate(maxDate)}` : '';
 
                 // Periodo etiqueta
                 let periodoTxt = 'Todos los datos';
@@ -6858,12 +7034,12 @@
                 // ===================================================================
                 // 1) CABECERA — 18mm
                 // ===================================================================
-                const HDR_H = 18;
+                const HDR_H = 22;
                 setFill(COLOR.petrol);
                 pdf.rect(0, 0, PAGE_W, HDR_H, 'F');
 
                 if (HOSPITAL_LOGO_BASE64) {
-                    try { pdf.addImage(HOSPITAL_LOGO_BASE64, 'PNG', M, 4, 18, 9); } catch (e) {}
+                    try { pdf.addImage(HOSPITAL_LOGO_BASE64, 'PNG', M, 5, 18, 9); } catch (e) {}
                 }
                 pdf.setFont('helvetica', 'bold');
                 pdf.setFontSize(13);
@@ -6874,23 +7050,42 @@
                 setText(COLOR.amber);
                 pdf.text('Indicadores de gestión farmacéutica · Hospital Universitari i Politècnic La Fe', M + 24, 13.5);
 
+                // Fila superior derecha: PERIODO y FECHA
                 pdf.setFont('helvetica', 'normal');
                 pdf.setFontSize(6.5);
                 setText([200, 215, 222]);
-                pdf.text('PERIODO', PAGE_W - M - 56, 6.5);
-                pdf.text('FECHA', PAGE_W - M, 6.5, { align: 'right' });
+                pdf.text('PERIODO', PAGE_W - M - 56, 6);
+                pdf.text('FECHA', PAGE_W - M, 6, { align: 'right' });
                 pdf.setFont('helvetica', 'bold');
                 pdf.setFontSize(9);
                 setText([255, 255, 255]);
-                pdf.text(periodoTxt, PAGE_W - M - 56, 10.5);
+                pdf.text(periodoTxt, PAGE_W - M - 56, 10);
                 pdf.setFontSize(8);
-                pdf.text(fecha, PAGE_W - M, 10.5, { align: 'right' });
-                if (activeFilters.length > 0) {
+                pdf.text(fecha, PAGE_W - M, 10, { align: 'right' });
+
+                // Fila inferior derecha: intervalo de fechas de dispensaciones
+                if (dateRangeTxt) {
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(6.5);
+                    setText([200, 215, 222]);
+                    pdf.text('DISPENSACIONES', PAGE_W - M, 14.5, { align: 'right' });
+                    setText([255, 255, 255]);
+                    pdf.setFontSize(7.5);
+                    pdf.text(dateRangeTxt, PAGE_W - M, 19, { align: 'right' });
+                } else if (activeFilters.length > 0) {
                     pdf.setFont('helvetica', 'normal');
                     pdf.setFontSize(6.5);
                     setText([200, 215, 222]);
                     const ftxt = 'Filtros: ' + activeFilters.join(' · ');
-                    pdf.text(ftxt.length > 70 ? ftxt.substring(0, 70) + '…' : ftxt, PAGE_W - M, 15, { align: 'right' });
+                    pdf.text(ftxt.length > 70 ? ftxt.substring(0, 70) + '…' : ftxt, PAGE_W - M, 19, { align: 'right' });
+                }
+                if (dateRangeTxt && activeFilters.length > 0) {
+                    // Si hay ambos, los filtros van alineados a la izquierda en la fila inferior
+                    pdf.setFont('helvetica', 'normal');
+                    pdf.setFontSize(6.5);
+                    setText([200, 215, 222]);
+                    const ftxt = 'Filtros: ' + activeFilters.join(' · ');
+                    pdf.text(ftxt.length > 55 ? ftxt.substring(0, 55) + '…' : ftxt, M + 24, 19);
                 }
 
                 // ===================================================================
@@ -7190,20 +7385,22 @@
                     y += BS_H + bsGap;
                     const b3x = M, b3y = y;
                     card(b3x, b3y, bsW, BS_H, COLOR.green);
+                    const bioTitleSuffix = granularity === 'years' ? 'anual' : granularity === 'quarters' ? 'trimestral' : 'mensual';
                     blockHeader(b3x, b3y, 'B', COLOR.green, 'Biosimilares',
-                                'Penetración anual sobre PA con alternativa disponible');
+                                `Penetración ${bioTitleSuffix} sobre PA con alternativa disponible`);
 
                     const chW3 = bsW * 0.62;
                     const kpiX3 = b3x + chW3 + 4;
                     const c3 = document.createElement('canvas');
                     c3.width = 800; c3.height = 500;
                     tempDiv.appendChild(c3);
+                    const biosimCompactLabels = biosimByPeriod.periods.map(p => GRAN.shortLabel(p));
                     const ch3 = new Chart(c3, {
                         type: 'bar',
                         data: {
-                            labels: biosimData.years,
+                            labels: biosimCompactLabels,
                             datasets: [{
-                                data: biosimData.percentages.map(v => parseFloat(v)),
+                                data: biosimByPeriod.percentages.map(v => parseFloat(v)),
                                 backgroundColor: 'rgba(16, 168, 122, 0.92)',
                                 borderRadius: 3, borderSkipped: false
                             }]
@@ -7213,7 +7410,7 @@
                             plugins: { legend: { display: false }, tooltip: { enabled: false } },
                             scales: {
                                 y: { beginAtZero: true, max: 100, grid: { color: 'rgba(226,232,240,0.7)', drawBorder: false }, ticks: { color: '#94a3b8', font: { size: 18 }, callback: v => v + '%' } },
-                                x: { grid: { display: false, drawBorder: false }, ticks: { color: '#475569', font: { size: 20, weight: '600' } } }
+                                x: { grid: { display: false, drawBorder: false }, ticks: { color: '#475569', font: { size: granularity === 'months' ? 12 : 20, weight: '600' }, maxRotation: granularity === 'months' ? 45 : 0 } }
                             }
                         }
                     });
@@ -7239,11 +7436,18 @@
                         .filter(x => x.bio > 0)
                         .sort((a, b) => b.bio - a.bio)
                         .slice(0, 3);
-                    const lastBioPct = biosimData.percentages && biosimData.percentages.length > 0
-                        ? parseFloat(biosimData.percentages[biosimData.percentages.length - 1]) : 0;
-                    const prevBioPct = biosimData.percentages && biosimData.percentages.length > 1
-                        ? parseFloat(biosimData.percentages[biosimData.percentages.length - 2]) : null;
+                    const lastBioPct = biosimByPeriod.percentages && biosimByPeriod.percentages.length > 0
+                        ? parseFloat(biosimByPeriod.percentages[biosimByPeriod.percentages.length - 1]) : 0;
+                    const lastBioPeriodLabel = biosimByPeriod.periods && biosimByPeriod.periods.length > 0
+                        ? GRAN.shortLabel(biosimByPeriod.periods[biosimByPeriod.periods.length - 1]) : '';
+                    const prevBioPct = biosimByPeriod.percentages && biosimByPeriod.percentages.length > 1
+                        ? parseFloat(biosimByPeriod.percentages[biosimByPeriod.percentages.length - 2]) : null;
+                    const prevBioPeriodLabel = biosimByPeriod.periods && biosimByPeriod.periods.length > 1
+                        ? GRAN.shortLabel(biosimByPeriod.periods[biosimByPeriod.periods.length - 2]) : '';
                     const deltaBioPct = prevBioPct !== null ? (lastBioPct - prevBioPct) : null;
+                    const varLabel = deltaBioPct !== null
+                        ? `${deltaBioPct > 0 ? '+' : ''}${deltaBioPct.toFixed(1).replace('.', ',')} pp${prevBioPeriodLabel ? ' vs ' + prevBioPeriodLabel : ''}`
+                        : '—';
 
                     const miniKpiList = (kx, ky0, items) => {
                         let ky = ky0;
@@ -7260,9 +7464,11 @@
                         });
                     };
 
+                    const penetracionLabel = lastBioPeriodLabel ? `Penet. ${lastBioPeriodLabel}` : 'Penetración';
+                    const varInterLabel = granularity === 'years' ? 'Var. interanual' : granularity === 'quarters' ? 'Var. intertrimestral' : 'Var. intermensual';
                     miniKpiList(kpiX3, b3y + 16, [
-                        ['Penetración actual',  `${lastBioPct.toFixed(1).replace('.', ',')}%`],
-                        ['Var. interanual',     deltaBioPct !== null ? `${deltaBioPct > 0 ? '+' : ''}${deltaBioPct.toFixed(1).replace('.', ',')} pp` : '—'],
+                        [penetracionLabel,  `${lastBioPct.toFixed(1).replace('.', ',')}%`],
+                        [varInterLabel,     varLabel],
                         ['Top PA biosim',       top3Bio[0] ? (top3Bio[0].name.charAt(0) + top3Bio[0].name.slice(1).toLowerCase()) : '—'],
                         ['Pac. con biosim',     top3Bio[0] ? `${fmtInt(top3Bio[0].bio)} / ${fmtInt(top3Bio[0].total)}` : '—'],
                         ['2.º PA biosim',       top3Bio[1] ? (top3Bio[1].name.charAt(0) + top3Bio[1].name.slice(1).toLowerCase()) : '—'],
@@ -7579,6 +7785,12 @@
                     }
                 }
                 const fecha = new Date().toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' });
+                // Intervalo de fechas real de las dispensaciones
+                const validDates_bc = dataToProcess.map(r => r['Fecha Dispensación']).filter(d => d instanceof Date && !isNaN(d));
+                const minDate_bc = validDates_bc.length > 0 ? new Date(Math.min(...validDates_bc.map(d => d.getTime()))) : null;
+                const maxDate_bc = validDates_bc.length > 0 ? new Date(Math.max(...validDates_bc.map(d => d.getTime()))) : null;
+                const fmtDateBc = d => d ? d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+                const dateRangeTxt = minDate_bc && maxDate_bc ? `${fmtDateBc(minDate_bc)} – ${fmtDateBc(maxDate_bc)}` : '';
                 const activeFilters = [];
                 if (filters.year) activeFilters.push(`Año ${filters.year}`);
                 if (filters.service) activeFilters.push(filters.service);
@@ -7624,9 +7836,15 @@
                 pdf.setFontSize(8);
                 setText([180, 195, 205]);
                 pdf.text(`Generado el ${fecha}`, M, 67);
+                if (dateRangeTxt) {
+                    pdf.setFontSize(7.5);
+                    setText([160, 180, 195]);
+                    pdf.text(`Dispensaciones: ${dateRangeTxt}`, M, 71);
+                }
                 if (activeFilters.length > 0) {
                     const ftxt = 'Filtros: ' + activeFilters.join(' · ');
-                    pdf.text(ftxt.length > 80 ? ftxt.substring(0, 80) + '…' : ftxt, M, 70.5);
+                    pdf.setFontSize(7.5);
+                    pdf.text(ftxt.length > 80 ? ftxt.substring(0, 80) + '…' : ftxt, M, 74);
                 }
 
                 // KPIs hero
@@ -8337,6 +8555,12 @@
                     }
                 }
                 const fecha = new Date().toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' });
+                // Intervalo de fechas real de las dispensaciones
+                const validDates_bsc = dataToProcess.map(r => r['Fecha Dispensación']).filter(d => d instanceof Date && !isNaN(d));
+                const minDate_bsc = validDates_bsc.length > 0 ? new Date(Math.min(...validDates_bsc.map(d => d.getTime()))) : null;
+                const maxDate_bsc = validDates_bsc.length > 0 ? new Date(Math.max(...validDates_bsc.map(d => d.getTime()))) : null;
+                const fmtDateBsc = d => d ? d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+                const dateRangeTxt = minDate_bsc && maxDate_bsc ? `${fmtDateBsc(minDate_bsc)} – ${fmtDateBsc(maxDate_bsc)}` : '';
                 const activeFilters = [];
                 if (filters.year) activeFilters.push(`Año ${filters.year}`);
                 if (filters.service) activeFilters.push(filters.service);
@@ -8368,7 +8592,10 @@
                 pdf.setFont('helvetica', 'normal');
                 pdf.setFontSize(8.5);
                 setText([200, 215, 222]);
-                pdf.text(`Periodo: ${periodoTxt}  ·  Generado: ${fecha}`, M + 26, 19);
+                const headerLine = dateRangeTxt
+                    ? `Periodo: ${periodoTxt}  ·  Dispensaciones: ${dateRangeTxt}  ·  Generado: ${fecha}`
+                    : `Periodo: ${periodoTxt}  ·  Generado: ${fecha}`;
+                pdf.text(headerLine, M + 26, 19);
                 if (activeFilters.length > 0) {
                     pdf.setFontSize(7);
                     pdf.text('Filtros: ' + activeFilters.join(' · '), PAGE_W - M, 13, { align: 'right' });
@@ -8379,8 +8606,14 @@
                 const KPI_H = 22;
                 const kpiGap = 4;
                 const kpiW = (W - kpiGap * 3) / 4;
+                // Etiquetas del último y penúltimo período para mostrar en KPI y hero
+                const lastPeriodLabel = periods.length > 0 ? GRAN.shortLabel(periods[periods.length - 1]) : '';
+                const prevPeriodLabel = periods.length > 1 ? GRAN.shortLabel(periods[periods.length - 2]) : '';
+                const penetracionLabel = lastPeriodLabel
+                    ? `Penet. ${lastPeriodLabel}`
+                    : 'Penetración global';
                 const kpisCompact = [
-                    { label: 'Penetración global',     value: fmtPct(penetracion),         sub: `${fmtInt(allBio.size)} de ${fmtInt(allBiosable.size)} pac.`, accent: COLOR.mint, delta: deltaPct, deltaUnit: 'pp' },
+                    { label: penetracionLabel,            value: fmtPct(lastPct),             sub: `${fmtInt(allBio.size)} de ${fmtInt(allBiosable.size)} pac.`, accent: COLOR.mint, delta: deltaPct, deltaUnit: 'pp' },
                     { label: 'Pacientes con biosim.', value: fmtCompact(allBio.size),     sub: fmtInt(allBio.size),                                            accent: COLOR.mintDeep },
                     { label: '% del coste',            value: fmtPct(pctCoste),            sub: `${fmtCurrency(costeBio)}`,                                    accent: COLOR.amber },
                     { label: 'Marcas activas',         value: String(brandArr.length),     sub: `${brandArr.length} de ${BIOSIMILARES.length} biosim.`,        accent: COLOR.petrol }
@@ -8442,23 +8675,27 @@
                     }
                 };
 
-                // -------- BLOQUE A (arriba-izq): Hero stat con penetración global --------
+                // -------- BLOQUE A (arriba-izq): Hero stat con penetración del último período --------
                 const aX = M, aY = y;
                 card(aX, aY, blockW, blockH);
-                blockHeader(aX, aY, blockW, 'Penetración global', 'Pacientes con biosimilar sobre PA biosimilarables');
+                const heroBlockTitle = lastPeriodLabel ? `Penetración ${lastPeriodLabel}` : 'Penetración global';
+                const heroBlockSubtitle = lastPeriodLabel
+                    ? `Pacientes con biosimilar sobre PA biosimilarables · ${lastPeriodLabel}`
+                    : 'Pacientes con biosimilar sobre PA biosimilarables';
+                blockHeader(aX, aY, blockW, heroBlockTitle, heroBlockSubtitle);
                 // Número grande
                 const heroY = aY + blockH/2 + 5;
                 setText(COLOR.mint);
                 pdf.setFont('helvetica', 'bold');
                 pdf.setFontSize(56);
-                const bigTxt = Number(penetracion).toFixed(1).replace('.', ',');
+                const bigTxt = Number(lastPct).toFixed(1).replace('.', ',');
                 pdf.text(bigTxt, aX + 8, heroY);
                 const bigW = pdf.getTextWidth(bigTxt);
                 pdf.setFontSize(20);
                 setText(COLOR.mintDeep);
                 pdf.text('%', aX + 8 + bigW + 2, heroY);
 
-                // Delta
+                // Delta con label del período anterior
                 if (deltaPct !== null) {
                     const isUp = deltaPct > 0;
                     const dColor = isUp ? COLOR.mint : COLOR.red;
@@ -8474,7 +8711,8 @@
                     setText(COLOR.muted);
                     pdf.setFont('helvetica', 'normal');
                     pdf.setFontSize(8);
-                    pdf.text(`vs ${GRAN.periodPlural} anterior`, aX + 38, heroY + 8);
+                    const vsLabel = prevPeriodLabel ? `vs ${prevPeriodLabel}` : `vs ${GRAN.periodPlural} anterior`;
+                    pdf.text(vsLabel, aX + 38, heroY + 8);
                 }
                 // Cifras debajo
                 setText(COLOR.inkSoft);
@@ -10380,7 +10618,7 @@
                     <div className="header">
                         <div className="header-text">
                             <h1>🏥 Dashboard analizador de dispensaciones IMID</h1>
-                            <p>Sistema de indicadores cuantitativos · Farmacia Hospitalaria · H. U. i P. La Fe · <strong>v33</strong></p>
+                            <p>Sistema de indicadores cuantitativos · Farmacia Hospitalaria · H. U. i P. La Fe · <strong>v34</strong></p>
                         </div>
                         {(() => {
                             const activeCount = [filters.year, filters.service, filters.pathology, filters.activeIngredient, filters.dateFrom, filters.dateTo].filter(Boolean).length + (paFilterMode === 'selection' && selectedPASet.size > 0 ? 1 : 0);
@@ -12086,16 +12324,33 @@
                                                 </div>
                                             </div>
 
-                                            {/* Fecha de inicio */}
+                                            {/* Ventana temporal: inicio, fin de inclusión, fin de observación */}
                                             <div style={{marginBottom: '18px'}}>
-                                                <label style={{display: 'block', fontWeight: 600, color: '#1a5276', marginBottom: '8px'}}>2. Fecha de inicio del análisis:</label>
-                                                <input type="date" value={persistStartDate}
-                                                    onChange={(e) => setPersistStartDate(e.target.value)}
-                                                    style={{padding: '10px 14px', border: '2px solid #2980b9', borderRadius: '8px', fontSize: '1em'}} />
+                                                <label style={{display: 'block', fontWeight: 600, color: '#1a5276', marginBottom: '8px'}}>2. Ventana temporal del análisis:</label>
+                                                <div style={{display: 'flex', gap: '14px', flexWrap: 'wrap'}}>
+                                                    <div>
+                                                        <label style={{display: 'block', fontSize: '0.82em', color: '#475569', marginBottom: '4px'}}>Inicio del análisis</label>
+                                                        <input type="date" value={persistStartDate}
+                                                            onChange={(e) => { setPersistStartDate(e.target.value); setPersistResults(null); }}
+                                                            style={{padding: '9px 12px', border: '2px solid #2980b9', borderRadius: '8px', fontSize: '0.95em'}} />
+                                                    </div>
+                                                    <div>
+                                                        <label style={{display: 'block', fontSize: '0.82em', color: '#475569', marginBottom: '4px'}}>Fin de inclusión (reclutamiento)</label>
+                                                        <input type="date" value={persistInclusionEnd}
+                                                            onChange={(e) => { setPersistInclusionEnd(e.target.value); setPersistResults(null); }}
+                                                            style={{padding: '9px 12px', border: '1px solid #cbd5e1', borderRadius: '8px', fontSize: '0.95em'}} />
+                                                    </div>
+                                                    <div>
+                                                        <label style={{display: 'block', fontSize: '0.82em', color: '#475569', marginBottom: '4px'}}>Fin de observación</label>
+                                                        <input type="date" value={persistObsEnd}
+                                                            onChange={(e) => { setPersistObsEnd(e.target.value); setPersistResults(null); }}
+                                                            style={{padding: '9px 12px', border: '1px solid #cbd5e1', borderRadius: '8px', fontSize: '0.95em'}} />
+                                                    </div>
+                                                </div>
                                                 {getMinStartDate() && (
-                                                    <p style={{margin: '8px 0 0', fontSize: '0.85em', color: '#64748b'}}>
-                                                        📅 Fecha mínima permitida (primera dispensación + 4 meses): <strong>{getMinStartDate().toLocaleDateString('es-ES')}</strong>.
-                                                        {' '}Última fecha de la tabla: <strong>{getTableLastDate() && getTableLastDate().toLocaleDateString('es-ES')}</strong>.
+                                                    <p style={{margin: '10px 0 0', fontSize: '0.83em', color: '#64748b', lineHeight: 1.5}}>
+                                                        📅 Inicio mínimo permitido (1ª dispensación + 4 meses de lavado): <strong>{getMinStartDate().toLocaleDateString('es-ES')}</strong>. Última fecha de la tabla: <strong>{getTableLastDate() && getTableLastDate().toLocaleDateString('es-ES')}</strong>.<br />
+                                                        Solo se incluyen pacientes que <strong>inician</strong> el tratamiento entre el inicio y el fin de inclusión. El seguimiento de todos se corta en el fin de observación (censura administrativa). Si dejas en blanco el fin de inclusión y de observación, se usa la última fecha de la tabla.
                                                     </p>
                                                 )}
                                             </div>
@@ -12245,6 +12500,34 @@
                                                     <div style={{height: '420px'}}>
                                                         <canvas id="kmChart"></canvas>
                                                     </div>
+                                                    {/* Números en riesgo (estándar en publicaciones Kaplan-Meier) */}
+                                                    <div style={{overflowX: 'auto', marginTop: '16px'}}>
+                                                        <div style={{fontSize: '0.82em', fontWeight: 600, color: '#1a5276', marginBottom: '6px'}}>Nº de pacientes en riesgo</div>
+                                                        <table style={{borderCollapse: 'collapse', fontSize: '0.78em'}}>
+                                                            <thead><tr>
+                                                                <th style={{padding: '4px 10px', textAlign: 'left', color: '#64748b'}}></th>
+                                                                {persistResults.timePoints.map(tp => (
+                                                                    <th key={tp.idx} style={{padding: '4px 10px', textAlign: 'center', color: '#64748b', fontWeight: 600}}>{tp.label}</th>
+                                                                ))}
+                                                            </tr></thead>
+                                                            <tbody>
+                                                                {persistResults.perMed.map((m, idx) => {
+                                                                    const palette = ['#2980b9', '#e74c3c', '#27ae60', '#f39c12', '#8e44ad', '#16a085', '#d35400', '#2c3e50', '#c0392b', '#7f8c8d'];
+                                                                    return (
+                                                                        <tr key={m.med}>
+                                                                            <td style={{padding: '4px 10px', whiteSpace: 'nowrap'}}>
+                                                                                <span style={{display: 'inline-block', width: '10px', height: '10px', borderRadius: '2px', background: palette[idx % palette.length], marginRight: '6px'}}></span>
+                                                                                {m.med.length > 24 ? m.med.slice(0, 24) + '…' : m.med}
+                                                                            </td>
+                                                                            {m.points.map(p => (
+                                                                                <td key={p.label} style={{padding: '4px 10px', textAlign: 'center', color: p.reliable ? '#334155' : '#e67e22'}}>{p.atRisk}</td>
+                                                                            ))}
+                                                                        </tr>
+                                                                    );
+                                                                })}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
                                                 </div>
 
                                                 {/* Por cada medicamento: resumen + tabla */}
@@ -12302,33 +12585,46 @@
                                                             )}
                                                         </div>
 
+                                                        {/* Mediana de persistencia */}
+                                                        <div style={{background: '#eef7ff', border: '1px solid #b3d8f5', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px', fontSize: '0.9em', color: '#1a5276'}}>
+                                                            <strong>Mediana de persistencia:</strong>{' '}
+                                                            {m.km.medianReached
+                                                                ? <span>{m.km.median} días (~{(m.km.median / 30.4375).toFixed(1)} meses) — tiempo en el que la persistencia cae al 50%.</span>
+                                                                : <span>no alcanzada (la persistencia no desciende por debajo del 50% dentro del período observado).</span>}
+                                                        </div>
+
                                                         {/* Tabla de persistencia por punto temporal */}
                                                         <strong style={{color: '#1a5276', fontSize: '0.92em'}}>Persistencia por punto temporal (cohorte analizada: n={m.cohortN}):</strong>
                                                         <div style={{overflowX: 'auto', marginTop: '8px'}}>
-                                                            <table style={{borderCollapse: 'collapse', fontSize: '0.85em', minWidth: '420px'}}>
+                                                            <table style={{borderCollapse: 'collapse', fontSize: '0.85em', minWidth: '520px'}}>
                                                                 <thead><tr style={{background: '#1B4354', color: '#fff'}}>
                                                                     <th style={{padding: '6px 12px', textAlign: 'left'}}>Tiempo</th>
                                                                     <th style={{padding: '6px 12px', textAlign: 'right'}}>En riesgo</th>
-                                                                    <th style={{padding: '6px 12px', textAlign: 'right'}}>Persistentes (n)</th>
+                                                                    <th style={{padding: '6px 12px', textAlign: 'right'}}>Persistentes (est.)</th>
                                                                     <th style={{padding: '6px 12px', textAlign: 'right'}}>Persistencia (%)</th>
+                                                                    <th style={{padding: '6px 12px', textAlign: 'right'}}>IC 95%</th>
                                                                 </tr></thead>
                                                                 <tbody>
                                                                     {m.points.map(p => (
-                                                                        <tr key={p.label} style={{borderBottom: '1px solid #eee'}}>
-                                                                            <td style={{padding: '5px 12px'}}>{p.label}</td>
+                                                                        <tr key={p.label} style={{borderBottom: '1px solid #eee', opacity: p.reliable ? 1 : 0.55}}>
+                                                                            <td style={{padding: '5px 12px'}}>{p.label}{!p.reliable && <span title={`Menos de ${m.cohortN >= 0 ? persistResults.minAtRisk : ''} pacientes en riesgo: estimación poco fiable`} style={{color: '#e67e22'}}> ⚠️</span>}</td>
                                                                             <td style={{padding: '5px 12px', textAlign: 'right'}}>{p.atRisk}</td>
                                                                             <td style={{padding: '5px 12px', textAlign: 'right'}}>{p.nPersist}</td>
                                                                             <td style={{padding: '5px 12px', textAlign: 'right', fontWeight: 600}}>{p.pct}%</td>
+                                                                            <td style={{padding: '5px 12px', textAlign: 'right', color: '#64748b'}}>{p.ciL}–{p.ciU}%</td>
                                                                         </tr>
                                                                     ))}
                                                                 </tbody>
                                                             </table>
                                                         </div>
+                                                        <p style={{fontSize: '0.78em', color: '#94a3b8', margin: '6px 0 0'}}>
+                                                            ⚠️ = menos de {persistResults.minAtRisk} pacientes en riesgo (cola poco fiable, mostrada en discontinuo en la curva). "Persistentes (est.)" = S(t) × n, es una estimación, no un recuento exacto.
+                                                        </p>
                                                     </div>
                                                 ))}
 
-                                                <div style={{fontSize: '0.8em', color: '#94a3b8', marginTop: '8px'}}>
-                                                    Definiciones: abandono = ausencia de reposición durante más de 4 meses (122 días) desde la cobertura esperada, o cambio a otro medicamento. Censura = pacientes cuyo seguimiento desde la última dispensación hasta el fin de la tabla es inferior a 75 días. Curva estimada por el método de Kaplan-Meier.
+                                                <div style={{fontSize: '0.8em', color: '#94a3b8', marginTop: '8px', lineHeight: 1.5}}>
+                                                    <strong>Metodología:</strong> Diseño de nuevo usuario (lavado de {persistResults.coverageDays + persistResults.graceDays >= 0 ? '4 meses' : ''} previo). Persistencia estimada por Kaplan-Meier. Fin de persistencia (evento) = discontinuación por falta de reposición (hueco entre dispensaciones &gt; {persistResults.gapDays} días = {persistResults.coverageDays} días de cobertura + {persistResults.graceDays} de margen), fechado al agotarse la cobertura del último envase; o cambio a otro medicamento, lo que ocurra antes. Censura administrativa en el fin de observación para quienes siguen en tratamiento (gap hasta el cierre ≤ {persistResults.gapDays} días). IC 95% por transformación log-log (varianza de Greenwood).
                                                 </div>
                                             </div>
                                         )}
@@ -12338,8 +12634,8 @@
                                             const detail = persistResults.perMed.find(x => x.med === persistDetailMed);
                                             if (!detail) return null;
                                             const fmt = (d) => (d instanceof Date && !isNaN(d)) ? d.toLocaleDateString('es-ES') : '—';
-                                            const outcomeLabel = { persist: 'Persiste', gap: 'Abandono (gap)', switch: 'Cambio de tratamiento', censored: 'Censurado' };
-                                            const outcomeColor = { persist: '#27ae60', gap: '#e67e22', switch: '#c0392b', censored: '#7f8c8d' };
+                                            const outcomeLabel = { gap: 'Discontinuación (falta de reposición)', switch: 'Cambio de tratamiento', censored: 'En tratamiento al cierre (censurado)' };
+                                            const outcomeColor = { gap: '#e67e22', switch: '#c0392b', censored: '#27ae60' };
                                             const rows = [...detail.subjects].sort((a, b) => a.firstDate - b.firstDate);
                                             return (
                                                 <div
