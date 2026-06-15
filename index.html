@@ -10,6 +10,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-sankey@0.12.1/dist/chartjs-chart-sankey.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <style>
@@ -214,6 +215,8 @@
         /* ── TABLES ── */
         .table-container {
             overflow-x: auto;
+            overflow-y: auto;
+            max-height: 70vh;
             background: var(--blanco);
             border-radius: 0 0 var(--radius) var(--radius);
             box-shadow: 0 1px 4px rgba(0,0,0,0.06);
@@ -237,6 +240,7 @@
             border-bottom: 2px solid var(--azul-claro);
             position: sticky;
             top: 0;
+            z-index: 2;
         }
 
         td {
@@ -546,6 +550,20 @@
             color: var(--azul);
         }
 
+        .btn-png {
+            float: right;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--azul-claro);
+            background: var(--gris-fondo);
+            border: 1px solid var(--gris-borde);
+            border-radius: var(--radius);
+            padding: 0.2rem 0.55rem;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .btn-png:hover { background: #e9eef5; }
+
         /* ── RANKING ── */
         .dashboard-ranking {
             background: var(--blanco);
@@ -599,6 +617,61 @@
 
         .analysis-chart-container canvas {
             max-height: 450px;
+        }
+
+        /* ── INFOTIP (ayuda contextual) ── */
+        .infotip {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            vertical-align: middle;
+            margin-left: 5px;
+            cursor: help;
+        }
+        .infotip-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background: var(--azul-claro);
+            color: #fff;
+            font-size: 10px;
+            font-weight: 700;
+            font-style: normal;
+            line-height: 1;
+            user-select: none;
+        }
+        .infotip-bubble {
+            position: absolute;
+            bottom: calc(100% + 8px);
+            left: 50%;
+            transform: translateX(-50%);
+            width: max-content;
+            max-width: 260px;
+            background: #1f2d3d;
+            color: #fff;
+            padding: 0.55rem 0.7rem;
+            border-radius: 6px;
+            font-size: 0.72rem;
+            font-weight: 400;
+            line-height: 1.45;
+            text-transform: none;
+            letter-spacing: normal;
+            text-align: left;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+            z-index: 1200;
+            white-space: normal;
+        }
+        .infotip-bubble::after {
+            content: '';
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            border: 6px solid transparent;
+            border-top-color: #1f2d3d;
         }
 
         /* ── MODAL ── */
@@ -697,6 +770,49 @@
             'UZPRUVO': 'Ustekinumab', 'STEQEYMA': 'Ustekinumab', 'PYZCHYVA': 'Ustekinumab',
             'OMLYCLO': 'Omalizumab',
             'GOBIVAZ': 'Golimumab'
+        };
+
+        // Parsea un número admitiendo formato español (1.234,56), anglosajón (1,234.56) o numérico puro
+        const parseNumES = (val) => {
+            if (val == null) return 0;
+            if (typeof val === 'number') return isNaN(val) ? 0 : val;
+            let s = String(val).trim().replace(/[€%\s]/g, '');
+            if (!s) return 0;
+            const hasComma = s.includes(',');
+            const hasDot = s.includes('.');
+            if (hasComma && hasDot) {
+                // El separador más a la derecha es el decimal
+                if (s.lastIndexOf(',') > s.lastIndexOf('.')) {
+                    s = s.replace(/\./g, '').replace(',', '.'); // ES: 1.234,56
+                } else {
+                    s = s.replace(/,/g, '');                    // EN: 1,234.56
+                }
+            } else if (hasComma) {
+                s = s.replace(',', '.');                        // solo coma → decimal ES
+            }
+            // solo punto → ya es decimal válido; no se toca (evita ×100 en "1234.56")
+            const n = parseFloat(s);
+            return isNaN(n) ? 0 : n;
+        };
+
+        // Icono de ayuda contextual con burbuja (hover en escritorio, clic/tap en móvil)
+        const InfoTip = ({ text }) => {
+            const [open, setOpen] = React.useState(false);
+            return (
+                <span
+                    className="infotip"
+                    onMouseEnter={() => setOpen(true)}
+                    onMouseLeave={() => setOpen(false)}
+                    onClick={(e) => { e.stopPropagation(); e.preventDefault(); setOpen(o => !o); }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={'Ayuda: ' + text}
+                    title={text}
+                >
+                    <span className="infotip-icon" aria-hidden="true">i</span>
+                    {open && <span className="infotip-bubble">{text}</span>}
+                </span>
+            );
         };
 
         // Detecta qué biosimilar contiene una descripción de producto
@@ -918,6 +1034,11 @@
                             if (chart) chart.destroy();
                         });
                     }
+                    // Al salir de 'analysis' también liberamos su gráfico
+                    if (viewMode !== 'analysis' && window.analysisChart) {
+                        try { window.analysisChart.destroy(); } catch (e) {}
+                        window.analysisChart = null;
+                    }
                 };
             }, [viewMode, data, filters]);
 
@@ -935,28 +1056,77 @@
                         const sheetName = workbook.SheetNames[0];
                         const worksheet = workbook.Sheets[sheetName];
                         const jsonData = XLSX.utils.sheet_to_json(worksheet);
-                        
-                        // Procesar fechas
-                        jsonData.forEach(row => {
-                            if (row['Fecha Dispensación']) {
-                                const excelDate = row['Fecha Dispensación'];
-                                if (typeof excelDate === 'number') {
-                                    // Convertir fecha de Excel a JavaScript
-                                    const date = new Date((excelDate - 25569) * 86400 * 1000);
-                                    row['Fecha Dispensación'] = date;
-                                } else if (typeof excelDate === 'string') {
-                                    row['Fecha Dispensación'] = new Date(excelDate);
+
+                        // Validación de columnas clave
+                        if (jsonData.length > 0) {
+                            const cols = Object.keys(jsonData[0]);
+                            const requeridas = ['Fecha Dispensación', 'Id'];
+                            const faltan = requeridas.filter(c => !cols.includes(c));
+                            if (faltan.length > 0) {
+                                alert('Aviso: el archivo no contiene la(s) columna(s): ' + faltan.join(', ') +
+                                      '.\nLos análisis pueden quedar incompletos. Revisa que el Excel tenga las cabeceras esperadas.');
+                            }
+                        }
+
+                        // Parser robusto de fecha (número serie Excel o texto DD/MM/AAAA, ISO, etc.)
+                        const parseFecha = (valor) => {
+                            if (valor instanceof Date) {
+                                return isNaN(valor) ? null : new Date(valor.getFullYear(), valor.getMonth(), valor.getDate());
+                            }
+                            if (typeof valor === 'number') {
+                                // Serie de Excel → componentes UTC para evitar desfase por zona horaria
+                                const utc = new Date(Math.round((valor - 25569) * 86400 * 1000));
+                                if (isNaN(utc)) return null;
+                                return new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate());
+                            }
+                            if (typeof valor === 'string') {
+                                const s = valor.trim();
+                                if (!s) return null;
+                                let m;
+                                // ISO: AAAA-MM-DD
+                                if ((m = s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})/))) {
+                                    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+                                    return isNaN(d) ? null : d;
                                 }
+                                // Español: DD/MM/AAAA (o DD-MM-AAAA, DD.MM.AA)
+                                if ((m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/))) {
+                                    let dd = +m[1], mm = +m[2], yy = +m[3];
+                                    if (yy < 100) yy += 2000;
+                                    if (dd > 31 || mm > 12) return null;
+                                    const d = new Date(yy, mm - 1, dd);
+                                    return isNaN(d) ? null : d;
+                                }
+                                return null;
+                            }
+                            return null;
+                        };
+
+                        // Procesar fechas (descarta y cuenta las no parseables)
+                        let fechasInvalidas = 0;
+                        jsonData.forEach(row => {
+                            if (row['Fecha Dispensación'] != null && row['Fecha Dispensación'] !== '') {
+                                const fecha = parseFecha(row['Fecha Dispensación']);
+                                if (fecha) {
+                                    row['Fecha Dispensación'] = fecha;
+                                } else {
+                                    row['Fecha Dispensación'] = null;
+                                    fechasInvalidas++;
+                                }
+                            } else {
+                                row['Fecha Dispensación'] = null;
                             }
                         });
-                        
+                        if (fechasInvalidas > 0) {
+                            console.warn('Fechas no reconocidas y descartadas: ' + fechasInvalidas);
+                        }
+
                         // Extraer opciones únicas para los filtros
                         const years = [...new Set(jsonData.map(row => {
                             if (row['Fecha Dispensación']) {
                                 return row['Fecha Dispensación'].getFullYear();
                             }
                             return null;
-                        }).filter(Boolean))].sort();
+                        }).filter(Boolean))].sort((a, b) => a - b);
 
                         const services = [...new Set(jsonData
                             .map(row => row['Servicio Prescriptor'])
@@ -980,7 +1150,7 @@
                             activeIngredients
                         });
 
-                        setFilters({ year: '', service: '', pathology: '', activeIngredient: '' });
+                        setFilters({ year: '', service: '', pathology: '', activeIngredient: '', dateFrom: '', dateTo: '' });
                         setData(jsonData);
                         setLoading(false);
                     } catch (error) {
@@ -1035,11 +1205,8 @@
                     const matchHoras = faseActiva.match(/^(\d+(?:\.\d+)?)\s+.+?\s+cada\s+(\d+(?:\.\d+)?)\s+horas?\b/i);
                     if (matchHoras) {
                         const horas = parseFloat(matchHoras[2]);
-                        // Si >= 7 horas, interpretar como días (error de registro)
-                        if (horas >= 7 && horas > 24) {
-                            return { unidadesPorToma: parseFloat(matchHoras[1]), intervaloDias: horas };
-                        }
-                        // Horas reales (ej: cada 12 horas, cada 8 horas)
+                        if (!horas) return null;
+                        // "cada X horas" = X/24 días (ej: cada 12 h = 0,5 días; cada 48 h = 2 días)
                         return { unidadesPorToma: parseFloat(matchHoras[1]), intervaloDias: horas / 24 };
                     }
                     return null;
@@ -1049,13 +1216,9 @@
                 let intervalo = parseFloat(match[2]);
                 const unidad = match[3].toLowerCase();
 
-                // Interpretar horas como días si >= 7
+                // "cada X horas" = X/24 días (interpretación farmacológica directa)
                 if (unidad.startsWith('hora')) {
-                    if (intervalo >= 7 && intervalo > 24) {
-                        // Error de registro: "28 horas" = "28 días"
-                    } else {
-                        intervalo = intervalo / 24;
-                    }
+                    intervalo = intervalo / 24;
                 }
 
                 return { unidadesPorToma, intervaloDias: intervalo };
@@ -1063,7 +1226,8 @@
 
             const calcularDiasCubiertos = (cantidad, posologia) => {
                 const parsed = parsePosologia(posologia);
-                if (!parsed || parsed.unidadesPorToma === 0) return null;
+                if (!parsed || !parsed.unidadesPorToma || !parsed.intervaloDias) return null;
+                if (isNaN(parsed.unidadesPorToma) || isNaN(parsed.intervaloDias)) return null;
                 // días cubiertos = (cantidad / unidades_por_toma) * intervalo_en_días
                 return (cantidad / parsed.unidadesPorToma) * parsed.intervaloDias;
             };
@@ -1124,7 +1288,7 @@
                     }
                     currentTratamiento.dispensaciones.push(row);
                     currentTratamiento.totalUnidades += parseInt(row['Cantidad']) || 0;
-                    currentTratamiento.totalCoste += parseFloat(row['Coste Dispensación']) || 0;
+                    currentTratamiento.totalCoste += parseNumES(row['Coste Dispensación']);
                 });
                 if (currentTratamiento) {
                     tratamientos.push(currentTratamiento);
@@ -1649,6 +1813,13 @@
                         }
                     }
                 });
+                // Cleanup: destruir la instancia al desmontar o re-renderizar
+                return () => {
+                    if (window.kmChartInstance) {
+                        try { window.kmChartInstance.destroy(); } catch (e) {}
+                        window.kmChartInstance = null;
+                    }
+                };
             }, [persistResults, viewMode]);
 
             const applyFilters = () => {
@@ -1789,16 +1960,9 @@
                         const unidadesStr = row['TOTAL Unidades'] || '0';
                         const costeStr = row['TOTAL Coste'] || '0';
                         
-                        // Parsear unidades
-                        const unidades = parseFloat(unidadesStr) || 0;
-                        
-                        // Parsear coste (puede tener formato español)
-                        let costeParsed = costeStr;
-                        if (typeof costeParsed === 'string') {
-                            // Remover separadores de miles y reemplazar coma decimal por punto
-                            costeParsed = costeParsed.replace(/\./g, '').replace(',', '.');
-                        }
-                        const coste = parseFloat(costeParsed) || 0;
+                        // Parsear unidades y coste (admite formato ES, EN o numérico)
+                        const unidades = parseNumES(unidadesStr);
+                        const coste = parseNumES(costeStr);
                         
                         productTotals[producto] = { unidades, coste };
                     });
@@ -1972,14 +2136,145 @@
                         }
                     });
                 }
+                else if (results.type === 'sankey' && results.sankeyData && results.sankeyData.flows.length) {
+                    // Requiere el plugin chartjs-chart-sankey; si no cargó, se muestra solo la tabla
+                    let sankeyReady = false;
+                    try { sankeyReady = !!Chart.registry.controllers.get('sankey'); } catch (e) { sankeyReady = false; }
+                    if (!sankeyReady) { console.warn('Plugin Sankey no disponible: se muestra solo la tabla.'); return; }
+                    const palette = ['#2980b9','#27ae60','#e67e22','#8e44ad','#16a085','#c0392b','#2c3e50','#d35400','#7f8c8d','#1a5276'];
+                    const colorOf = (name) => { let h = 0; const s = String(name || ''); for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return palette[h % palette.length]; };
+                    const strip = (v, pfx) => String(v || '').replace(pfx, '');
+                    try {
+                        window.analysisChart = new Chart(ctx, {
+                            type: 'sankey',
+                            data: {
+                                datasets: [{
+                                    label: 'Cambios de tratamiento',
+                                    data: results.sankeyData.flows,
+                                    labels: results.sankeyData.labels,
+                                    colorFrom: (c) => colorOf(strip(c.raw && c.raw.from, /^src:/)),
+                                    colorTo: (c) => colorOf(strip(c.raw && c.raw.to, /^dst:/)),
+                                    colorMode: 'gradient',
+                                    borderWidth: 0,
+                                    nodeWidth: 14
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                plugins: {
+                                    title: { display: true, text: 'Cambios de tratamiento (origen → destino)' },
+                                    legend: { display: false },
+                                    tooltip: { callbacks: { label: (c) => `${strip(c.raw.from, /^src:/)} → ${strip(c.raw.to, /^dst:/)}: ${c.raw.flow} pacientes` } }
+                                }
+                            }
+                        });
+                    } catch (e) {
+                        console.warn('No se pudo dibujar el Sankey:', e.message);
+                    }
+                    return;
+                }
+                else if (results.type === 'histogram' && results.chartData) {
+                    const cd = results.chartData;
+                    window.analysisChart = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: cd.labels,
+                            datasets: [{
+                                label: cd.yTitle || 'Frecuencia',
+                                data: cd.counts,
+                                backgroundColor: cd.colors || 'rgba(41, 128, 185, 0.85)',
+                                borderColor: 'rgba(0,0,0,0.1)',
+                                borderWidth: 1
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            plugins: {
+                                title: { display: true, text: 'Distribución de adherencia (MPR)' },
+                                legend: { display: false },
+                                tooltip: { callbacks: { label: (c) => `${c.parsed.y} tratamientos` } }
+                            },
+                            scales: {
+                                x: { title: { display: true, text: cd.xTitle || '' } },
+                                y: { beginAtZero: true, title: { display: true, text: cd.yTitle || '' }, ticks: { precision: 0 } }
+                            }
+                        }
+                    });
+                }
+                else if (results.type === 'pareto' && results.chartData) {
+                    const cd = results.chartData;
+                    window.analysisChart = new Chart(ctx, {
+                        data: {
+                            labels: cd.labels,
+                            datasets: [
+                                {
+                                    type: 'bar',
+                                    label: 'Coste (€)',
+                                    data: cd.costes,
+                                    backgroundColor: 'rgba(41, 128, 185, 0.85)',
+                                    borderColor: '#1a5276',
+                                    borderWidth: 1,
+                                    yAxisID: 'y',
+                                    order: 2
+                                },
+                                {
+                                    type: 'line',
+                                    label: '% acumulado',
+                                    data: cd.pctAcum,
+                                    borderColor: '#c0392b',
+                                    backgroundColor: 'rgba(192, 57, 43, 0.1)',
+                                    borderWidth: 2.5,
+                                    pointRadius: 3,
+                                    pointBackgroundColor: '#c0392b',
+                                    tension: 0.3,
+                                    yAxisID: 'y1',
+                                    order: 1
+                                }
+                            ]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: true,
+                            interaction: { mode: 'index', intersect: false },
+                            plugins: {
+                                title: { display: true, text: 'Pareto de coste (regla 80/20)' },
+                                legend: { position: 'top' },
+                                tooltip: {
+                                    callbacks: {
+                                        label: (c) => c.dataset.yAxisID === 'y1'
+                                            ? `% acumulado: ${c.parsed.y}%`
+                                            : `Coste: ${Number(c.parsed.y).toLocaleString('es-ES', {maximumFractionDigits: 0})} €`
+                                    }
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    position: 'left',
+                                    title: { display: true, text: 'Coste (€)' },
+                                    ticks: { callback: v => '€' + Number(v).toLocaleString('es-ES', {maximumFractionDigits: 0}) }
+                                },
+                                y1: {
+                                    beginAtZero: true,
+                                    max: 100,
+                                    position: 'right',
+                                    grid: { drawOnChartArea: false },
+                                    title: { display: true, text: '% acumulado' },
+                                    ticks: { callback: v => v + '%' }
+                                },
+                                x: { ticks: { maxRotation: 60, minRotation: 30, autoSkip: false, font: { size: 9 } } }
+                            }
+                        }
+                    });
+                }
             };
 
 
-            
+
             // === FUNCIONES PARA DASHBOARD ===
             const calculateGlobalTotals = (dataToProcess) => {
                 const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 const pacientes = new Set(validData.map(row => row['Id'])).size;
@@ -1988,7 +2283,7 @@
                 )).size;
                 const dispensaciones = validData.length;
                 const coste = validData.reduce((sum, row) => 
-                    sum + (parseFloat(row['Coste Dispensación']) || 0), 0
+                    sum + (parseNumES(row['Coste Dispensación'])), 0
                 );
 
                 return { pacientes, visitas, dispensaciones, coste };
@@ -1996,7 +2291,7 @@
             
             const calculateEvolutionByYear = (dataToProcess) => {
                 const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 const yearData = {};
@@ -2033,7 +2328,7 @@
                         paData[pa] = { ids: new Set(), coste: 0 };
                     }
                     paData[pa].ids.add(row['Id']);
-                    paData[pa].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    paData[pa].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 return Object.keys(paData)
@@ -2121,7 +2416,7 @@
                     percentages: years.map(y => {
                         const total = yearData[y].pacientesTotal.size;
                         const biosim = yearData[y].pacientesBiosimilar.size;
-                        return total > 0 ? (biosim / total * 100).toFixed(1) : '0.0';
+                        return total > 0 ? Math.round(biosim / total * 1000) / 10 : 0;
                     })
                 };
             };
@@ -2162,7 +2457,7 @@
                     percentages: periods.map(p => {
                         const total = periodData[p].total.size;
                         const bio = periodData[p].bio.size;
-                        return total > 0 ? (bio / total * 100).toFixed(1) : '0.0';
+                        return total > 0 ? Math.round(bio / total * 1000) / 10 : 0;
                     })
                 };
             };
@@ -2391,8 +2686,8 @@
 
                 // Penetración de biosimilares
                 if (bioData.percentages && bioData.percentages.length > 0) {
-                    const lastBioPercentage = bioData.percentages[bioData.percentages.length - 1];
-                    insights.push(`Penetración actual de biosimilares: ${lastBioPercentage}%.`);
+                    const lastBioPercentage = Number(bioData.percentages[bioData.percentages.length - 1]) || 0;
+                    insights.push(`Penetración actual de biosimilares: ${lastBioPercentage.toFixed(1).replace('.', ',')}%.`);
                 }
 
                 return insights;
@@ -2727,7 +3022,7 @@
                             : '-';
                         const med       = (row['Descripción Producto Dispensado'] || '-');
                         const cant      = (row['Cantidad'] !== undefined && row['Cantidad'] !== null) ? row['Cantidad'].toString() : '-';
-                        const coste     = `${(parseFloat(row['Coste Dispensación']) || 0).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €`;
+                        const coste     = `${(parseNumES(row['Coste Dispensación'])).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €`;
                         const servicio  = (row['Servicio Prescriptor'] || '-');
                         const patologia = (row['Patología'] || '-');
 
@@ -2843,7 +3138,7 @@
                             : '-';
                         const med   = (row['Descripción Producto Dispensado'] || '-');
                         const cant  = (row['Cantidad'] !== undefined && row['Cantidad'] !== null) ? row['Cantidad'].toString() : '-';
-                        const coste = `${(parseFloat(row['Coste Dispensación']) || 0).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €`;
+                        const coste = `${(parseNumES(row['Coste Dispensación'])).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €`;
 
                         pdf.setFontSize(7);
                         pdf.setFont('helvetica', 'normal');
@@ -3421,7 +3716,7 @@
 
                     const yearsProd = [...new Set(chartData.prodData.data.flatMap(row => Object.keys(row).filter(k => k.includes('Coste') && !k.includes('TOTAL')).map(k => k.split(' ')[0])))].sort();
                     const sortedProd = chartData.prodData.data
-                        .map(row => ({ producto: row.Producto, total: parseFloat((row['TOTAL Coste'] || '0').replace(/\./g, '').replace(',', '.')) }))
+                        .map(row => ({ producto: row.Producto, total: parseNumES(row['TOTAL Coste']) }))
                         .sort((a, b) => b.total - a.total)
                         .slice(0, 10);
                     const colorsProd = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
@@ -3434,7 +3729,7 @@
                                 const row = chartData.prodData.data.find(r => r.Producto === item.producto);
                                 return {
                                     label: item.producto.substring(0, 12),
-                                    data: yearsProd.map(year => parseFloat((row[year + ' Coste'] || '0').replace(/\./g, '').replace(',', '.'))),
+                                    data: yearsProd.map(year => parseNumES(row[year + ' Coste'])),
                                     borderColor: colorsProd[idx],
                                     borderWidth: 1.5,
                                     tension: 0.4
@@ -3778,7 +4073,7 @@
 
                     const quartersProd = [...new Set(chartData.prodData.data.flatMap(row => Object.keys(row).filter(k => k.includes('Coste') && !k.includes('TOTAL')).map(k => k.split(' ')[0])))].sort();
                     const sortedProd = chartData.prodData.data
-                        .map(row => ({ producto: row.Producto, total: parseFloat((row['TOTAL Coste'] || '0').replace(/\./g, '').replace(',', '.')) }))
+                        .map(row => ({ producto: row.Producto, total: parseNumES(row['TOTAL Coste']) }))
                         .sort((a, b) => b.total - a.total)
                         .slice(0, 10);
                     const colorsProd = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
@@ -3791,7 +4086,7 @@
                                 const row = chartData.prodData.data.find(r => r.Producto === item.producto);
                                 return {
                                     label: item.producto.substring(0, 12),
-                                    data: quartersProd.map(q => parseFloat((row[q + ' Coste'] || '0').replace(/\./g, '').replace(',', '.'))),
+                                    data: quartersProd.map(q => parseNumES(row[q + ' Coste'])),
                                     borderColor: colorsProd[idx],
                                     borderWidth: 1.5,
                                     tension: 0.4
@@ -4136,7 +4431,7 @@
 
                     const monthsProd = [...new Set(chartData.prodData.data.flatMap(row => Object.keys(row).filter(k => k.includes('Coste') && !k.includes('TOTAL')).map(k => k.split(' ')[0])))].sort();
                     const sortedProd = chartData.prodData.data
-                        .map(row => ({ producto: row.Producto, total: parseFloat((row['TOTAL Coste'] || '0').replace(/\./g, '').replace(',', '.')) }))
+                        .map(row => ({ producto: row.Producto, total: parseNumES(row['TOTAL Coste']) }))
                         .sort((a, b) => b.total - a.total)
                         .slice(0, 10);
                     const colorsProd = ['#2980b9', '#84fab0', '#fcb69f', '#ff6b9d', '#feca57', '#48dbfb', '#ff9ff3', '#54a0ff', '#ee5a6f', '#c23616'];
@@ -4149,7 +4444,7 @@
                                 const row = chartData.prodData.data.find(r => r.Producto === item.producto);
                                 return {
                                     label: item.producto.substring(0, 12),
-                                    data: monthsProd.map(m => parseFloat((row[m + ' Coste'] || '0').replace(/\./g, '').replace(',', '.'))),
+                                    data: monthsProd.map(m => parseNumES(row[m + ' Coste'])),
                                     borderColor: colorsProd[idx],
                                     borderWidth: 1.5,
                                     tension: 0.4
@@ -4698,7 +4993,7 @@
                             const pv = parseFloat(prevYearRow.Coste);
                             if (pv > 0) delta = ((v - pv) / pv * 100);
                         }
-                        costKpis.push({ label: `Coste total ${lastYearRow.Periodo}`, value: fmtCurrencyCompact(v), full: fmtCurrency(v), delta, color: COLOR.accent3 });
+                        costKpis.push({ label: `Coste total ${lastYearRow.Periodo}`, value: fmtCurrencyCompact(v), full: fmtCurrency(v), delta, color: COLOR.accent3, upIsBad: true });
                     }
                     // 2) Coste/paciente último año
                     if (lastCpRow) {
@@ -4708,7 +5003,7 @@
                             const pv = parseFloat(prevCpRow['Coste/Paciente']);
                             if (pv > 0) delta = ((v - pv) / pv * 100);
                         }
-                        costKpis.push({ label: `Coste/paciente ${lastCpRow.Periodo}`, value: '€' + fmtCompact(v), full: '€' + Number(v).toLocaleString('es-ES', {maximumFractionDigits: 0}), delta, color: COLOR.accent });
+                        costKpis.push({ label: `Coste/paciente ${lastCpRow.Periodo}`, value: '€' + fmtCompact(v), full: '€' + Number(v).toLocaleString('es-ES', {maximumFractionDigits: 0}), delta, color: COLOR.accent, upIsBad: true });
                     }
                     // 3) Pacientes último año
                     if (lastYearRow) {
@@ -4717,7 +5012,7 @@
                         if (prevYearRow && prevYearRow.Pacientes > 0) {
                             delta = ((v - prevYearRow.Pacientes) / prevYearRow.Pacientes * 100);
                         }
-                        costKpis.push({ label: `Pacientes ${lastYearRow.Periodo}`, value: fmtCompact(v), full: fmtInt(v), delta, color: COLOR.accent2 });
+                        costKpis.push({ label: `Pacientes ${lastYearRow.Periodo}`, value: fmtCompact(v), full: fmtInt(v), delta, color: COLOR.accent2, upIsBad: false });
                     }
                     const ckH = 32;
                     const ckGap = 4;
@@ -4739,7 +5034,9 @@
                         // Delta con triangulito dibujado
                         if (k.delta !== null && !isNaN(k.delta)) {
                             const isUp = k.delta > 0;
-                            const deltaColor = isUp ? COLOR.accent3 : COLOR.accent2;
+                            // Color según si la subida es buena o mala para esa métrica
+                            const isGood = k.upIsBad ? !isUp : isUp;
+                            const deltaColor = isGood ? COLOR.accent2 : COLOR.accent3;
                             // Triángulo (apex 2.4mm de altura)
                             setFill(deltaColor);
                             const tx = x + 5;
@@ -6436,7 +6733,7 @@
                     if (!row['Fecha Dispensación'] || !row['Descripción Principio Activo']) return;
                     const pa = row['Descripción Principio Activo'];
                     const pk = getPeriodKey(row['Fecha Dispensación']);
-                    const c = parseFloat(row['Coste Dispensación']) || 0;
+                    const c = parseNumES(row['Coste Dispensación']);
                     if (!paCostByPeriod[pa]) paCostByPeriod[pa] = { total: 0 };
                     paCostByPeriod[pa][pk] = (paCostByPeriod[pa][pk] || 0) + c;
                     paCostByPeriod[pa].total += c;
@@ -7743,7 +8040,7 @@
                     const pa = String(row['Descripción Principio Activo']).toUpperCase();
                     const paKey = PA_WITH_BIO.find(p => pa.includes(p));
                     if (!paKey) return;
-                    const coste = parseFloat(row['Coste Dispensación']) || 0;
+                    const coste = parseNumES(row['Coste Dispensación']);
                     const prod = String(row['Descripción Producto Dispensado'] || '').toUpperCase();
                     const isBio = BIOSIMILARES.some(b => prod.includes(b));
 
@@ -8300,7 +8597,7 @@
                     brandStats[brand].pats.add(row['Id']);
                     brandStats[brand].dispensaciones++;
                     brandStats[brand].unidades += parseInt(row['Cantidad']) || 0;
-                    brandStats[brand].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    brandStats[brand].coste += parseNumES(row['Coste Dispensación']);
                 });
                 const brandArr = Object.keys(brandStats).map(b => ({
                     brand: b,
@@ -8494,13 +8791,13 @@
                     if (brand) {
                         if (!brandStats[brand]) brandStats[brand] = { pats: new Set(), coste: 0 };
                         brandStats[brand].pats.add(row['Id']);
-                        brandStats[brand].coste += parseFloat(row['Coste Dispensación']) || 0;
+                        brandStats[brand].coste += parseNumES(row['Coste Dispensación']);
                     }
                     if (!row['Descripción Principio Activo']) return;
                     const pa = String(row['Descripción Principio Activo']).toUpperCase();
                     const paKey = PA_WITH_BIO.find(p => pa.includes(p));
                     if (!paKey) return;
-                    const coste = parseFloat(row['Coste Dispensación']) || 0;
+                    const coste = parseNumES(row['Coste Dispensación']);
                     if (!paStats[paKey]) paStats[paKey] = { bio: new Set(), total: new Set() };
                     paStats[paKey].total.add(row['Id']);
                     allBiosable.add(row['Id']);
@@ -8974,7 +9271,7 @@
                     monthlyData[key][service].pacientes.add(row['Id']);
                     monthlyData[key][service].visitas.add(`${row['Id']}_${key}`);
                     monthlyData[key][service].dispensaciones += 1;
-                    monthlyData[key][service].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    monthlyData[key][service].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const months = Object.keys(monthlyData).sort();
@@ -9040,7 +9337,7 @@
                     }
 
                     monthlyData[key][pa].pacientes.add(row['Id']);
-                    monthlyData[key][pa].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    monthlyData[key][pa].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const months = Object.keys(monthlyData).sort();
@@ -9080,13 +9377,179 @@
                 };
             };
 
+            // Distribución poblacional de adherencia (MPR) — misma metodología que el histórico por paciente
+            const calculateAdherenceDistribution = (dataToProcess) => {
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
+                );
+                // Agrupar dispensaciones por paciente
+                const byPatient = new Map();
+                validData.forEach(row => {
+                    const id = String(row['Id']).trim();
+                    if (!byPatient.has(id)) byPatient.set(id, []);
+                    byPatient.get(id).push(row);
+                });
+
+                const mprValues = [];      // MPR de cada tratamiento evaluable
+                let noEvaluables = 0;      // tratamientos con <2 disp. o posología no interpretable
+
+                byPatient.forEach(rows => {
+                    // Ordenar cronológicamente (y por medicamento en empate)
+                    const sorted = rows.filter(r => (parseInt(r['Cantidad']) || 0) > 0).sort((a, b) => {
+                        const da = a['Fecha Dispensación'].getTime(), db = b['Fecha Dispensación'].getTime();
+                        if (da !== db) return da - db;
+                        return (a['Descripción Producto Dispensado'] || '').localeCompare(b['Descripción Producto Dispensado'] || '');
+                    });
+                    // Agrupar en episodios contiguos por principio activo
+                    const tratamientos = [];
+                    let cur = null;
+                    sorted.forEach(row => {
+                        const pa = (row['Descripción Principio Activo'] || 'DESCONOCIDO').trim();
+                        if (!cur || cur.pa !== pa) { if (cur) tratamientos.push(cur); cur = { pa, disps: [] }; }
+                        cur.disps.push(row);
+                    });
+                    if (cur) tratamientos.push(cur);
+
+                    tratamientos.forEach(tto => {
+                        const disps = tto.disps;
+                        if (disps.length < 2) { noEvaluables++; return; }
+                        const first = disps[0]['Fecha Dispensación'], last = disps[disps.length - 1]['Fecha Dispensación'];
+                        const diasTotales = Math.round((last.getTime() - first.getTime()) / 86400000);
+                        if (diasTotales <= 0) { noEvaluables++; return; }
+                        let diasCubiertos = 0, noParse = 0;
+                        disps.slice(0, -1).forEach(row => {
+                            const dias = calcularDiasCubiertos(parseInt(row['Cantidad']) || 0, row['Posología (Según Prescripción)'] || '');
+                            if (dias !== null) diasCubiertos += dias; else noParse++;
+                        });
+                        if (noParse > 0) { noEvaluables++; return; }
+                        mprValues.push(diasCubiertos / diasTotales * 100);
+                    });
+                });
+
+                // Histograma por tramos
+                const bins = [
+                    { label: '0–20%', min: 0,   max: 20,  color: 'rgba(192,57,43,0.85)' },
+                    { label: '20–40%', min: 20,  max: 40,  color: 'rgba(231,76,60,0.8)' },
+                    { label: '40–60%', min: 40,  max: 60,  color: 'rgba(230,126,34,0.8)' },
+                    { label: '60–80%', min: 60,  max: 80,  color: 'rgba(241,196,15,0.85)' },
+                    { label: '80–100%', min: 80, max: 100.0001, color: 'rgba(39,174,96,0.85)' },
+                    { label: '>100% (acúmulo)', min: 100.0001, max: Infinity, color: 'rgba(41,128,185,0.8)' }
+                ];
+                const counts = bins.map(() => 0);
+                mprValues.forEach(v => {
+                    for (let i = 0; i < bins.length; i++) {
+                        if (v >= bins[i].min && v < bins[i].max) { counts[i]++; break; }
+                    }
+                });
+
+                const n = mprValues.length;
+                const sorted = [...mprValues].sort((a, b) => a - b);
+                const mediana = n ? (n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2) : 0;
+                const media = n ? mprValues.reduce((s, v) => s + v, 0) / n : 0;
+                const pctAlta = n ? mprValues.filter(v => v >= 80).length / n * 100 : 0;
+                const fmtPct1 = (x) => x.toFixed(1).replace('.', ',') + '%';
+
+                const data = bins.map((b, i) => ({
+                    'Tramo de adherencia': b.label,
+                    'Tratamientos': counts[i],
+                    '% del total': n ? fmtPct1(counts[i] / n * 100) : '0,0%'
+                }));
+
+                return {
+                    type: 'histogram',
+                    title: `Distribución de adherencia (MPR) · ${n} tratamientos evaluables · mediana ${fmtPct1(mediana)} · ${fmtPct1(pctAlta)} con MPR≥80%`,
+                    chartData: {
+                        labels: bins.map(b => b.label),
+                        counts,
+                        colors: bins.map(b => b.color),
+                        xTitle: 'Tramo de adherencia (MPR)',
+                        yTitle: 'Nº de tratamientos'
+                    },
+                    summary: { n, mediana, media, pctAlta, noEvaluables },
+                    data,
+                    columnOrder: ['Tramo de adherencia', 'Tratamientos', '% del total'],
+                    note: `Un "tratamiento" = episodio contiguo de un mismo principio activo en un paciente. Se excluyen ${noEvaluables} tratamientos no evaluables (menos de 2 dispensaciones, mismo día, o posología no interpretable). MPR = días cubiertos / días entre primera y última dispensación.`
+                };
+            };
+
+            // Flujos de cambio de tratamiento (switching) entre principios activos
+            const calculateSwitching = (dataToProcess) => {
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== '' && row['Descripción Principio Activo']
+                );
+                const byPatient = new Map();
+                validData.forEach(row => {
+                    const id = String(row['Id']).trim();
+                    if (!byPatient.has(id)) byPatient.set(id, []);
+                    byPatient.get(id).push(row);
+                });
+
+                const transitions = {};       // "from→to" -> nº pacientes
+                let pacientesQueCambian = new Set();
+                let totalCambios = 0;
+
+                byPatient.forEach((rows, id) => {
+                    const sorted = rows.filter(r => (parseInt(r['Cantidad']) || 0) > 0).sort((a, b) => {
+                        const da = a['Fecha Dispensación'].getTime(), db = b['Fecha Dispensación'].getTime();
+                        if (da !== db) return da - db;
+                        return (a['Descripción Producto Dispensado'] || '').localeCompare(b['Descripción Producto Dispensado'] || '');
+                    });
+                    // Secuencia de PA en episodios contiguos
+                    const seq = [];
+                    sorted.forEach(row => {
+                        const pa = (row['Descripción Principio Activo'] || 'DESCONOCIDO').trim();
+                        if (seq.length === 0 || seq[seq.length - 1] !== pa) seq.push(pa);
+                    });
+                    for (let i = 0; i < seq.length - 1; i++) {
+                        const key = seq[i] + '→' + seq[i + 1];
+                        transitions[key] = (transitions[key] || 0) + 1;
+                        totalCambios++;
+                        pacientesQueCambian.add(id);
+                    }
+                });
+
+                const entries = Object.entries(transitions)
+                    .map(([k, v]) => { const [from, to] = k.split('→'); return { from, to, count: v }; })
+                    .sort((a, b) => b.count - a.count);
+
+                // Tabla (todos los flujos)
+                const data = entries.map(e => ({
+                    'Desde': e.from,
+                    'Hacia': e.to,
+                    'Pacientes': e.count
+                }));
+
+                // Datos para el Sankey (bipartito: nodos origen vs destino para evitar ciclos), top 30 flujos
+                const top = entries.slice(0, 30);
+                const flows = top.map(e => ({ from: 'src:' + e.from, to: 'dst:' + e.to, flow: e.count }));
+                const labels = {};
+                top.forEach(e => { labels['src:' + e.from] = e.from; labels['dst:' + e.to] = e.to; });
+
+                return {
+                    type: 'sankey',
+                    title: `Cambios de tratamiento · ${pacientesQueCambian.size} pacientes cambian · ${totalCambios} cambios · ${entries.length} transiciones distintas`,
+                    sankeyData: { flows, labels },
+                    data,
+                    columnOrder: ['Desde', 'Hacia', 'Pacientes'],
+                    note: `Cada flujo representa pacientes que pasaron de un principio activo (izquierda, "origen") a otro (derecha, "destino") en episodios consecutivos de tratamiento. Se cuentan todas las transiciones entre principios activos distintos. El diagrama muestra los ${Math.min(30, entries.length)} flujos más frecuentes; la tabla incluye todos.`
+                };
+            };
+
             const calculatePatientList = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
+                // Agrupar filas por paciente en una sola pasada (evita O(pacientes×filas))
+                const rowsById = new Map();
+                validData.forEach(row => {
+                    const id = row['Id'];
+                    if (!rowsById.has(id)) rowsById.set(id, []);
+                    rowsById.get(id).push(row);
+                });
+
                 // Obtener IDs únicos de pacientes
-                const patientIds = [...new Set(validData.map(row => row['Id']))].sort((a, b) => a - b);
+                const patientIds = [...rowsById.keys()].sort((a, b) => (Number(a) - Number(b)) || String(a).localeCompare(String(b)));
 
                 // Construir descripción de filtros activos
                 const activeFilters = [];
@@ -9101,9 +9564,9 @@
 
                 // Crear datos de tabla: cada fila es un paciente con su resumen
                 const tableData = patientIds.map(id => {
-                    const patientRows = validData.filter(row => row['Id'] === id);
+                    const patientRows = rowsById.get(id);
                     const dispensaciones = patientRows.length;
-                    const costeTotal = patientRows.reduce((sum, row) => sum + (parseFloat(row['Coste Dispensación']) || 0), 0);
+                    const costeTotal = patientRows.reduce((sum, row) => sum + (parseNumES(row['Coste Dispensación'])), 0);
                     const principiosActivos = [...new Set(patientRows.map(row => row['Descripción Principio Activo']).filter(Boolean))].join(', ');
                     const servicios = [...new Set(patientRows.map(row => row['Servicio Prescriptor']).filter(Boolean))].join(', ');
                     const fechas = patientRows.map(row => row['Fecha Dispensación']).filter(Boolean).sort((a, b) => a - b);
@@ -9174,6 +9637,15 @@
                             else if (g === 'months')   result = calculateCostPerPatientByMonth(dataToProcess);
                             else                       result = calculateCostPerPatientTotal(dataToProcess);
                             break;
+                        case 'pareto-coste':
+                            result = calculateCostPareto(dataToProcess);
+                            break;
+                        case 'adherencia':
+                            result = calculateAdherenceDistribution(dataToProcess);
+                            break;
+                        case 'switching':
+                            result = calculateSwitching(dataToProcess);
+                            break;
                         case 'combinados':
                             result = calculateCombinedTreatments(dataToProcess);
                             break;
@@ -9213,7 +9685,7 @@
 
             const calculateTotals = (dataToProcess) => {
                 const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 const pacientes = new Set(validData.map(row => row['Id'])).size;
@@ -9225,7 +9697,7 @@
                 const dispensaciones = validData.length;
                 
                 const coste = validData.reduce((sum, row) => 
-                    sum + (parseFloat(row['Coste Dispensación']) || 0), 0
+                    sum + (parseNumES(row['Coste Dispensación'])), 0
                 );
 
                 return {
@@ -9257,7 +9729,7 @@
 
             const calculateByYears = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 const yearData = {};
@@ -9278,7 +9750,7 @@
                         `${row['Id']}_${row['Fecha Dispensación'].toISOString().split('T')[0]}`
                     );
                     yearData[year].dispensaciones++;
-                    yearData[year].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    yearData[year].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const sortedYears = Object.keys(yearData).sort();
@@ -9309,7 +9781,7 @@
 
             const calculateByQuarters = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 const quarterData = {};
@@ -9335,7 +9807,7 @@
                         `${row['Id']}_${date.toISOString().split('T')[0]}`
                     );
                     quarterData[key].dispensaciones++;
-                    quarterData[key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    quarterData[key].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const sortedQuarters = Object.keys(quarterData).sort();
@@ -9366,7 +9838,7 @@
 
             const calculateByMonths = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 const monthData = {};
@@ -9391,7 +9863,7 @@
                         `${row['Id']}_${date.toISOString().split('T')[0]}`
                     );
                     monthData[key].dispensaciones++;
-                    monthData[key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    monthData[key].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const sortedMonths = Object.keys(monthData).sort();
@@ -9423,7 +9895,7 @@
             
             const calculateCostPerPatientByYear = (dataToProcess) => {
                 const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 const yearData = {};
@@ -9438,7 +9910,7 @@
                     }
                     
                     yearData[year].ids.add(row['Id']);
-                    yearData[year].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    yearData[year].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const results = Object.keys(yearData).sort().map(year => ({
@@ -9458,7 +9930,7 @@
 
             const calculateCostPerPatientByQuarter = (dataToProcess) => {
                 const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 const quarterData = {};
@@ -9478,7 +9950,7 @@
                     }
                     
                     quarterData[key].ids.add(row['Id']);
-                    quarterData[key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    quarterData[key].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const results = Object.keys(quarterData).sort().map(key => ({
@@ -9498,7 +9970,7 @@
 
             const calculateCostPerPatientByMonth = (dataToProcess) => {
                 const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 const monthData = {};
@@ -9517,7 +9989,7 @@
                     }
                     
                     monthData[key].ids.add(row['Id']);
-                    monthData[key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    monthData[key].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const results = Object.keys(monthData).sort().map(key => ({
@@ -9537,12 +10009,11 @@
 
             const calculateCombinedTreatments = (dataToProcess) => {
                 // Filtrar datos válidos
-                const validData = dataToProcess.filter(row => 
-                    row['Fecha Dispensación'] && 
-                    row['Id'] && 
-                    !isNaN(row['Id']) &&
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] &&
+                    row['Id'] != null && String(row['Id']).trim() !== '' &&
                     row['Descripción Principio Activo'] &&
-                    row['Cantidad'] && 
+                    row['Cantidad'] &&
                     parseFloat(row['Cantidad']) > 0
                 );
 
@@ -9590,7 +10061,7 @@
                     .map(([combination, patientIds]) => ({
                         'Combinación': combination,
                         'Número de pacientes': patientIds.size,
-                        'Id de los pacientes': Array.from(patientIds).sort((a, b) => a - b).join(', ')
+                        'Id de los pacientes': Array.from(patientIds).sort((a, b) => (Number(a) - Number(b)) || String(a).localeCompare(String(b))).join(', ')
                     }))
                     .sort((a, b) => b['Número de pacientes'] - a['Número de pacientes']);
 
@@ -9604,7 +10075,7 @@
 
             const calculateNewVsRecurringPatients = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 // Encontrar el primer año de cada paciente
@@ -9665,7 +10136,7 @@
 
             const calculateYearComparison = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 // Agrupar datos por año
@@ -9683,7 +10154,7 @@
                     yearData[year].ids.add(row['Id']);
                     yearData[year].visitas.add(`${row['Id']}_${row['Fecha Dispensación'].toISOString().split('T')[0]}`);
                     yearData[year].dispensaciones++;
-                    yearData[year].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    yearData[year].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const sortedYears = Object.keys(yearData).sort();
@@ -9697,23 +10168,26 @@
                     const prev = yearData[prevYear];
                     const curr = yearData[currYear];
 
+                    // Variación porcentual segura: null si el periodo previo es 0 (evita Infinity/NaN)
+                    const pct = (diff, base) => base > 0 ? (diff / base * 100) : null;
+                    const fmtPct = (n) => n === null ? '—' : (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+                    const trend = (n) => n === null ? '→' : (n > 2 ? '↑' : (n < -2 ? '↓' : '→'));
+
                     const pacientesDiff = curr.ids.size - prev.ids.size;
-                    const pacientesPct = ((pacientesDiff / prev.ids.size) * 100).toFixed(1);
-                    const visitasDiff = curr.visitas.size - prev.visitas.size;
-                    const visitasPct = ((visitasDiff / prev.visitas.size) * 100).toFixed(1);
+                    const pacientesPctN = pct(pacientesDiff, prev.ids.size);
                     const costeDiff = curr.coste - prev.coste;
-                    const costePct = ((costeDiff / prev.coste) * 100).toFixed(1);
+                    const costePctN = pct(costeDiff, prev.coste);
 
                     results.push({
                         'Comparación': `${prevYear} → ${currYear}`,
                         [`Pac. ${prevYear}`]: prev.ids.size,
                         [`Pac. ${currYear}`]: curr.ids.size,
                         'Dif. Pac.': (pacientesDiff >= 0 ? '+' : '') + pacientesDiff,
-                        '% Var. Pac.': (parseFloat(pacientesPct) >= 0 ? '+' : '') + pacientesPct + '%',
-                        'Tendencia': parseFloat(pacientesPct) > 2 ? '↑' : (parseFloat(pacientesPct) < -2 ? '↓' : '→'),
+                        '% Var. Pac.': fmtPct(pacientesPctN),
+                        'Tendencia': trend(pacientesPctN),
                         [`Coste ${prevYear}`]: '€' + prev.coste.toLocaleString('es-ES', {minimumFractionDigits: 0, maximumFractionDigits: 0}),
                         [`Coste ${currYear}`]: '€' + curr.coste.toLocaleString('es-ES', {minimumFractionDigits: 0, maximumFractionDigits: 0}),
-                        '% Var. Coste': (parseFloat(costePct) >= 0 ? '+' : '') + costePct + '%'
+                        '% Var. Coste': fmtPct(costePctN)
                     });
                 }
 
@@ -9727,7 +10201,7 @@
 
             const calculateActivityHeatmap = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
                 const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -9806,7 +10280,7 @@
                 const bioData     = {}; // producto → { pats: Set, coste }
 
                 validData.forEach(row => {
-                    const coste  = parseFloat(row['Coste Dispensación']) || 0;
+                    const coste  = parseNumES(row['Coste Dispensación']);
                     const bioKey = getBiosimilarKey(row['Descripción Producto Dispensado']);
                     const paCanon = bioKey
                         ? BIOSIMILAR_PA_MAP[bioKey]
@@ -9884,7 +10358,7 @@
                     }
                     if (!productData[producto]) productData[producto] = { unidades: 0, coste: 0 };
                     productData[producto].unidades += parseInt(row['Cantidad']) || 0;
-                    productData[producto].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    productData[producto].coste += parseNumES(row['Coste Dispensación']);
                 });
                 const results = Object.keys(productData)
                     .map(p => ({
@@ -9896,12 +10370,71 @@
                 return { type: 'table', title: 'Consumo por Medicamento (Total)', data: results };
             };
 
+            // Análisis de Pareto / ABC: qué medicamentos concentran el gasto
+            const calculateCostPareto = (dataToProcess) => {
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] && row['Descripción Producto Dispensado']
+                );
+                const productData = {};
+                validData.forEach(row => {
+                    let producto = row['Descripción Producto Dispensado'];
+                    for (const agrupacion of AGRUPACIONES_PRODUCTOS) {
+                        if (producto.includes(agrupacion)) { producto = agrupacion; break; }
+                    }
+                    if (!productData[producto]) productData[producto] = 0;
+                    productData[producto] += parseNumES(row['Coste Dispensación']);
+                });
+                const sorted = Object.entries(productData)
+                    .filter(([, c]) => c > 0)
+                    .sort((a, b) => b[1] - a[1]);
+                const totalCoste = sorted.reduce((s, [, c]) => s + c, 0);
+
+                const fmtEuro = (n) => n.toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+                const fmtPct = (n) => n.toFixed(1).replace('.', ',') + '%';
+
+                let acumulado = 0;
+                let umbral80 = null; // nº de productos que acumulan el 80% del gasto
+                const data = sorted.map(([producto, coste], i) => {
+                    acumulado += coste;
+                    const pctAcum = totalCoste > 0 ? (acumulado / totalCoste * 100) : 0;
+                    if (umbral80 === null && pctAcum >= 80) umbral80 = i + 1;
+                    return {
+                        'Producto': producto,
+                        'Coste (€)': fmtEuro(coste),
+                        '% del total': fmtPct(totalCoste > 0 ? coste / totalCoste * 100 : 0),
+                        '% acumulado': fmtPct(pctAcum),
+                        'Clase ABC': pctAcum <= 80 ? 'A' : (pctAcum <= 95 ? 'B' : 'C')
+                    };
+                });
+
+                // Datos crudos para el gráfico (limitado a los primeros 20 para legibilidad)
+                const topN = sorted.slice(0, 20);
+                let acc = 0;
+                const chartData = {
+                    labels: topN.map(([p]) => p),
+                    costes: topN.map(([, c]) => Math.round(c * 100) / 100),
+                    pctAcum: topN.map(([, c]) => { acc += c; return totalCoste > 0 ? Math.round(acc / totalCoste * 1000) / 10 : 0; })
+                };
+
+                const titulo = umbral80
+                    ? `Pareto de coste — ${umbral80} de ${sorted.length} productos concentran el 80% del gasto`
+                    : 'Pareto de coste (ABC)';
+
+                return {
+                    type: 'pareto',
+                    title: titulo,
+                    data,
+                    chartData,
+                    columnOrder: ['Producto', 'Coste (€)', '% del total', '% acumulado', 'Clase ABC']
+                };
+            };
+
             const calculateCostPerPatientTotal = (dataToProcess) => {
                 const validData = dataToProcess.filter(row =>
-                    row['Fecha Dispensación'] && row['Id'] && !isNaN(row['Id'])
+                    row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
                 const ids = new Set(validData.map(r => r['Id']));
-                const totalCoste = validData.reduce((s, r) => s + (parseFloat(r['Coste Dispensación']) || 0), 0);
+                const totalCoste = validData.reduce((s, r) => s + parseNumES(r['Coste Dispensación']), 0);
                 const results = [{
                     'Pacientes': ids.size,
                     'Coste Total (€)': totalCoste.toFixed(2),
@@ -10111,7 +10644,7 @@
                     if (!bioData[producto]) bioData[producto] = {};
                     if (!bioData[producto][year]) bioData[producto][year] = { pats: new Set(), coste: 0 };
                     bioData[producto][year].pats.add(row['Id']);
-                    bioData[producto][year].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    bioData[producto][year].coste += parseNumES(row['Coste Dispensación']);
                 });
                 const years = [...new Set(biosimilarData.map(r => r['Fecha Dispensación'].getFullYear()))].sort();
                 const fmt2 = v => v.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
@@ -10135,7 +10668,7 @@
                     const { paCanon, isBio } = resolvePA(row);
                     if (!paCanon) return;
                     const year = row['Fecha Dispensación'].getFullYear();
-                    const coste = parseFloat(row['Coste Dispensación']) || 0;
+                    const coste = parseNumES(row['Coste Dispensación']);
                     if (!paDataTotal[paCanon]) paDataTotal[paCanon] = {};
                     if (!paDataTotal[paCanon][year]) paDataTotal[paCanon][year] = new Set();
                     paDataTotal[paCanon][year].add(row['Id']);
@@ -10208,7 +10741,7 @@
                     if (!bioData[producto]) bioData[producto] = {};
                     if (!bioData[producto][key]) bioData[producto][key] = { pats: new Set(), coste: 0 };
                     bioData[producto][key].pats.add(row['Id']);
-                    bioData[producto][key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    bioData[producto][key].coste += parseNumES(row['Coste Dispensación']);
                 });
                 const quarters = [...new Set(biosimilarData.map(r => getQKey(r['Fecha Dispensación'])))].sort();
                 const fmt2 = v => v.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
@@ -10231,7 +10764,7 @@
                     const { paCanon, isBio } = resolvePA(row);
                     if (!paCanon) return;
                     const key = getQKey(row['Fecha Dispensación']);
-                    const coste = parseFloat(row['Coste Dispensación']) || 0;
+                    const coste = parseNumES(row['Coste Dispensación']);
                     if (!paDataTotal[paCanon]) paDataTotal[paCanon] = {};
                     if (!paDataTotal[paCanon][key]) paDataTotal[paCanon][key] = new Set();
                     paDataTotal[paCanon][key].add(row['Id']);
@@ -10298,7 +10831,7 @@
                     if (!bioData[producto]) bioData[producto] = {};
                     if (!bioData[producto][key]) bioData[producto][key] = { pats: new Set(), coste: 0 };
                     bioData[producto][key].pats.add(row['Id']);
-                    bioData[producto][key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    bioData[producto][key].coste += parseNumES(row['Coste Dispensación']);
                 });
                 const months = [...new Set(biosimilarData.map(r => getMKey(r['Fecha Dispensación'])))].sort();
                 const fmt2 = v => v.toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
@@ -10321,7 +10854,7 @@
                     const { paCanon, isBio } = resolvePA(row);
                     if (!paCanon) return;
                     const key = getMKey(row['Fecha Dispensación']);
-                    const coste = parseFloat(row['Coste Dispensación']) || 0;
+                    const coste = parseNumES(row['Coste Dispensación']);
                     if (!paDataTotal[paCanon]) paDataTotal[paCanon] = {};
                     if (!paDataTotal[paCanon][key]) paDataTotal[paCanon][key] = new Set();
                     paDataTotal[paCanon][key].add(row['Id']);
@@ -10406,7 +10939,7 @@
                     }
                     
                     productData[producto][year].unidades += parseInt(row['Cantidad']) || 0;
-                    productData[producto][year].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    productData[producto][year].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const years = [...new Set(validData.map(row => 
@@ -10477,7 +11010,7 @@
                     }
                     
                     productData[producto][key].unidades += parseInt(row['Cantidad']) || 0;
-                    productData[producto][key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    productData[producto][key].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const quarters = [...new Set(validData.map(row => {
@@ -10551,7 +11084,7 @@
                     }
                     
                     productData[producto][key].unidades += parseInt(row['Cantidad']) || 0;
-                    productData[producto][key].coste += parseFloat(row['Coste Dispensación']) || 0;
+                    productData[producto][key].coste += parseNumES(row['Coste Dispensación']);
                 });
 
                 const months = [...new Set(validData.map(row => {
@@ -10591,26 +11124,124 @@
                 };
             };
 
-            const exportToExcel = () => {
-                if (!results || !results.data) return;
+            // Devuelve un array de hojas [{ name, rows }] según el tipo de resultado
+            const getExportSheets = () => {
+                if (!results) return [];
+                // Tabla simple
+                if (Array.isArray(results.data) && results.data.length > 0 && typeof results.data[0] === 'object'
+                    && !('services' in results.data[0]) && !('paValues' in results.data[0])) {
+                    return [{ name: 'Resultados', rows: results.data }];
+                }
+                // Biosimilares (doble tabla)
+                if (results.type === 'biosim-dual') {
+                    const sheets = [];
+                    if (results.byPA && results.byPA.length) sheets.push({ name: 'Por principio activo', rows: results.byPA });
+                    if (results.byProduct && results.byProduct.length) sheets.push({ name: 'Por producto', rows: results.byProduct });
+                    return sheets;
+                }
+                // Racing por servicio → aplanar fotogramas a filas
+                if (results.type === 'racing' && Array.isArray(results.data)) {
+                    const rows = [];
+                    results.data.forEach(frame => {
+                        (frame.services || []).forEach(s => rows.push({
+                            'Periodo': frame.label, 'Servicio': s.service,
+                            'Pacientes (acum.)': s.pacientes, 'Visitas (acum.)': s.visitas,
+                            'Dispensaciones (acum.)': s.dispensaciones, 'Coste (acum.)': Math.round(s.coste * 100) / 100
+                        }));
+                    });
+                    return [{ name: 'Acumulado por servicio', rows }];
+                }
+                // Racing por principio activo
+                if (results.type === 'racing-pa' && Array.isArray(results.data)) {
+                    const rows = [];
+                    results.data.forEach(frame => {
+                        (frame.paValues || []).forEach(p => rows.push({
+                            'Periodo': frame.label, 'Principio activo': p.pa,
+                            'Pacientes (acum.)': p.pacientes, 'Coste (acum.)': Math.round(p.coste * 100) / 100
+                        }));
+                    });
+                    return [{ name: 'Acumulado por PA', rows }];
+                }
+                return [];
+            };
 
-                const ws = XLSX.utils.json_to_sheet(results.data);
+            const exportToExcel = () => {
+                const sheets = getExportSheets();
+                if (sheets.length === 0) { alert('Este análisis no admite exportación a Excel.'); return; }
                 const wb = XLSX.utils.book_new();
-                XLSX.utils.book_append_sheet(wb, ws, "Resultados");
+                sheets.forEach(sh => {
+                    const ws = XLSX.utils.json_to_sheet(sh.rows);
+                    XLSX.utils.book_append_sheet(wb, ws, sh.name.substring(0, 31));
+                });
                 XLSX.writeFile(wb, `${results.title.replace(/\s+/g, '_')}.xlsx`);
             };
 
             const exportToCSV = () => {
-                if (!results || !results.data) return;
-
-                const ws = XLSX.utils.json_to_sheet(results.data);
-                const csv = XLSX.utils.sheet_to_csv(ws);
-                const blob = new Blob([csv], { type: 'text/csv' });
+                const sheets = getExportSheets();
+                if (sheets.length === 0) { alert('Este análisis no admite exportación a CSV.'); return; }
+                // Une todas las hojas (cada una precedida de su nombre) en un único CSV con ; y BOM UTF-8
+                const csvParts = sheets.map(sh => {
+                    const ws = XLSX.utils.json_to_sheet(sh.rows);
+                    const head = sheets.length > 1 ? `"${sh.name}"\n` : '';
+                    return head + XLSX.utils.sheet_to_csv(ws, { FS: ';' });
+                });
+                const csv = '﻿' + csvParts.join('\n\n');
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
                 a.download = `${results.title.replace(/\s+/g, '_')}.csv`;
+                document.body.appendChild(a);
                 a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            };
+
+            // Descarga un <canvas> de Chart.js como PNG con fondo blanco
+            const downloadCanvasPNG = (canvasId, filename) => {
+                const src = document.getElementById(canvasId);
+                if (!src || (canvasId === 'analysisChart' && !window.analysisChart)) {
+                    alert('Este análisis no genera un gráfico exportable.');
+                    return;
+                }
+                const tmp = document.createElement('canvas');
+                tmp.width = src.width; tmp.height = src.height;
+                const c = tmp.getContext('2d');
+                c.fillStyle = '#ffffff';
+                c.fillRect(0, 0, tmp.width, tmp.height);
+                c.drawImage(src, 0, 0);
+                const a = document.createElement('a');
+                a.href = tmp.toDataURL('image/png');
+                a.download = filename || 'grafico.png';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+            };
+
+            // Nº de pacientes únicos por principio activo (memoizado) y lista ordenada por volumen
+            const paPatientCounts = React.useMemo(() => {
+                const m = {};
+                if (!data) return m;
+                data.forEach(row => {
+                    const pa = row['Descripción Principio Activo'];
+                    const id = row['Id'];
+                    if (!pa || id == null || String(id).trim() === '') return;
+                    if (!m[pa]) m[pa] = new Set();
+                    m[pa].add(String(id).trim());
+                });
+                const counts = {};
+                Object.keys(m).forEach(pa => { counts[pa] = m[pa].size; });
+                return counts;
+            }, [data]);
+
+            const paSortedByVolume = React.useMemo(() =>
+                [...(filterOptions.activeIngredients || [])].sort((a, b) =>
+                    (paPatientCounts[b] || 0) - (paPatientCounts[a] || 0) || String(a).localeCompare(String(b))
+                ), [filterOptions.activeIngredients, paPatientCounts]);
+
+            const selectTopPA = (n) => {
+                setSelectedPASet(new Set(paSortedByVolume.slice(0, n)));
+                setResults(null);
             };
 
             return (
@@ -10802,13 +11433,22 @@
                                                     />
                                                     <div style={{ display: 'flex', gap: '0.35rem' }}>
                                                         <button
-                                                            onClick={() => setSelectedPASet(new Set(filterOptions.activeIngredients))}
+                                                            onClick={() => { setSelectedPASet(new Set(filterOptions.activeIngredients)); setResults(null); }}
                                                             style={{ flex: 1, padding: '0.25rem', fontSize: '0.72rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--verde)', background: 'var(--blanco)', color: 'var(--verde)', cursor: 'pointer' }}
                                                         >Todos</button>
                                                         <button
-                                                            onClick={() => setSelectedPASet(new Set())}
+                                                            onClick={() => { setSelectedPASet(new Set()); setResults(null); }}
                                                             style={{ flex: 1, padding: '0.25rem', fontSize: '0.72rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--gris-borde)', background: 'var(--blanco)', color: 'var(--texto-sec)', cursor: 'pointer' }}
                                                         >Ninguno</button>
+                                                    </div>
+                                                    <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                                                        <span style={{ fontSize: '0.68rem', color: 'var(--texto-sec)', fontWeight: 600 }}>Top por nº pacientes:</span>
+                                                        {[5, 10, 20].map(n => (
+                                                            <button key={n}
+                                                                onClick={() => selectTopPA(n)}
+                                                                style={{ flex: 1, padding: '0.25rem', fontSize: '0.72rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--azul-claro)', background: 'var(--blanco)', color: 'var(--azul-claro)', cursor: 'pointer' }}
+                                                            >Top {n}</button>
+                                                        ))}
                                                     </div>
                                                     {selectedPASet.size > 0 && (
                                                         <div style={{ fontSize: '0.72rem', color: 'var(--azul)', fontWeight: '600', textAlign: 'center' }}>
@@ -10818,10 +11458,11 @@
                                                 </div>
                                                 {/* Checkbox list */}
                                                 <div style={{ maxHeight: '180px', overflowY: 'auto', padding: '0.25rem 0' }}>
-                                                    {filterOptions.activeIngredients
+                                                    {paSortedByVolume
                                                         .filter(pa => pa.toLowerCase().includes(paSearch.toLowerCase()))
                                                         .map(pa => {
                                                             const isChecked = selectedPASet.has(pa);
+                                                            const nPac = paPatientCounts[pa] || 0;
                                                             return (
                                                                 <label key={pa} style={{
                                                                     display: 'flex', alignItems: 'center', gap: '0.4rem',
@@ -10843,7 +11484,8 @@
                                                                         }}
                                                                         style={{ accentColor: 'var(--azul-claro)', width: '13px', height: '13px', flexShrink: 0 }}
                                                                     />
-                                                                    <span style={{ fontSize: '0.78rem', fontWeight: isChecked ? '600' : '400', color: 'var(--texto)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pa}>{pa}</span>
+                                                                    <span style={{ flex: 1, fontSize: '0.78rem', fontWeight: isChecked ? '600' : '400', color: 'var(--texto)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={pa}>{pa}</span>
+                                                                    <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--texto-sec)', background: 'var(--gris-fondo)', borderRadius: '10px', padding: '0 0.4rem', flexShrink: 0 }} title={nPac + ' pacientes'}>{nPac}</span>
                                                                 </label>
                                                             );
                                                         })}
@@ -10991,28 +11633,55 @@
                                 
                                 <div className="dashboard-kpis">
                                     {(() => {
-                                        const totals = calculateGlobalTotals(applyFilters() || data);
+                                        const dataToProcess = applyFilters() || data;
+                                        const totals = calculateGlobalTotals(dataToProcess);
+                                        const yearly = calculateByYears(dataToProcess).data;
+                                        const hasTrend = yearly.length >= 2;
+                                        const last = hasTrend ? yearly[yearly.length - 1] : null;
+                                        const prev = hasTrend ? yearly[yearly.length - 2] : null;
+                                        // Chip de tendencia último año vs anterior
+                                        const trendChip = (cur, prv, upIsBad) => {
+                                            if (!hasTrend || prv == null || prv <= 0) return null;
+                                            const d = (cur - prv) / prv * 100;
+                                            const up = d > 0;
+                                            const good = upIsBad ? !up : up;
+                                            const color = Math.abs(d) < 0.05 ? 'var(--texto-sec)' : (good ? 'var(--verde)' : 'var(--rojo)');
+                                            const arrow = Math.abs(d) < 0.05 ? '→' : (up ? '▲' : '▼');
+                                            return (
+                                                <div style={{ fontSize: '0.72rem', fontWeight: 700, color, marginTop: '3px' }}>
+                                                    {arrow} {Math.abs(d).toFixed(1).replace('.', ',')}%
+                                                    <span style={{ opacity: 0.7, fontWeight: 400 }}> vs {prev.Periodo}</span>
+                                                </div>
+                                            );
+                                        };
+                                        const fmtCoste = (n) => n >= 1e6
+                                            ? (n / 1e6).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' M €'
+                                            : Math.round(n).toLocaleString('es-ES') + ' €';
                                         return (
                                             <>
                                                 <div className="kpi-card primary">
                                                     <div className="kpi-label">Total Pacientes</div>
                                                     <div className="kpi-value">{totals.pacientes.toLocaleString('es-ES')}</div>
                                                     <div className="kpi-subtitle">Pacientes únicos</div>
+                                                    {last && trendChip(last.Pacientes, prev.Pacientes, false)}
                                                 </div>
                                                 <div className="kpi-card success">
                                                     <div className="kpi-label">Total Visitas</div>
                                                     <div className="kpi-value">{totals.visitas.toLocaleString('es-ES')}</div>
                                                     <div className="kpi-subtitle">Visitas registradas</div>
+                                                    {last && trendChip(last.Visitas, prev.Visitas, false)}
                                                 </div>
                                                 <div className="kpi-card warning">
                                                     <div className="kpi-label">Dispensaciones</div>
                                                     <div className="kpi-value">{totals.dispensaciones.toLocaleString('es-ES')}</div>
                                                     <div className="kpi-subtitle">Líneas dispensadas</div>
+                                                    {last && trendChip(last.Dispensaciones, prev.Dispensaciones, false)}
                                                 </div>
                                                 <div className="kpi-card info">
                                                     <div className="kpi-label">Coste Total</div>
-                                                    <div className="kpi-value">€{(totals.coste / 1000).toFixed(0)}K</div>
-                                                    <div className="kpi-subtitle">€{totals.coste.toLocaleString('es-ES', {minimumFractionDigits: 2})}</div>
+                                                    <div className="kpi-value">{fmtCoste(totals.coste)}</div>
+                                                    <div className="kpi-subtitle">{totals.coste.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €</div>
+                                                    {last && trendChip(parseNumES(last.Coste), parseNumES(prev.Coste), true)}
                                                 </div>
                                             </>
                                         );
@@ -11021,18 +11690,18 @@
                                 
                                 <div className="dashboard-charts">
                                     <div className="chart-card full-width">
-                                        <div className="chart-title">📈 Evolución temporal</div>
-                                        <canvas id="evolutionChart"></canvas>
+                                        <div className="chart-title"><button className="btn-png" onClick={() => downloadCanvasPNG('evolutionChart', 'evolucion_temporal.png')} aria-label="Descargar gráfico como PNG">⬇️ PNG</button>📈 Evolución temporal</div>
+                                        <canvas id="evolutionChart" role="img" aria-label="Gráfico de evolución temporal de pacientes, visitas, dispensaciones y coste"></canvas>
                                     </div>
                                     
                                     <div className="chart-card">
-                                        <div className="chart-title">💊 Top principios activos</div>
-                                        <canvas id="topPAChart"></canvas>
+                                        <div className="chart-title"><button className="btn-png" onClick={() => downloadCanvasPNG('topPAChart', 'top_principios_activos.png')} aria-label="Descargar gráfico como PNG">⬇️ PNG</button>💊 Top principios activos</div>
+                                        <canvas id="topPAChart" role="img" aria-label="Gráfico de los principios activos con más pacientes"></canvas>
                                     </div>
                                     
                                     <div className="chart-card">
-                                        <div className="chart-title">🏥 Distribución por servicio</div>
-                                        <canvas id="serviceChart"></canvas>
+                                        <div className="chart-title"><button className="btn-png" onClick={() => downloadCanvasPNG('serviceChart', 'distribucion_por_servicio.png')} aria-label="Descargar gráfico como PNG">⬇️ PNG</button>🏥 Distribución por servicio</div>
+                                        <canvas id="serviceChart" role="img" aria-label="Distribución de pacientes por servicio prescriptor"></canvas>
                                     </div>
                                 </div>
                                 
@@ -11049,8 +11718,8 @@
                                 
                                 <div className="dashboard-charts">
                                     <div className="chart-card full-width">
-                                        <div className="chart-title">🔄 Penetración de biosimilares (% pacientes)</div>
-                                        <canvas id="biosimilarChart"></canvas>
+                                        <div className="chart-title"><button className="btn-png" onClick={() => downloadCanvasPNG('biosimilarChart', 'penetracion_biosimilares.png')} aria-label="Descargar gráfico como PNG">⬇️ PNG</button>🔄 Penetración de biosimilares (% pacientes)<InfoTip text="Porcentaje de pacientes que reciben un biosimilar sobre el total de pacientes tratados con un principio activo que dispone de biosimilar. Mide el grado de adopción de biosimilares (mayor % = mayor eficiencia/ahorro)." /></div>
+                                        <canvas id="biosimilarChart" role="img" aria-label="Evolución de la penetración de biosimilares por periodo"></canvas>
                                     </div>
                                 </div>
                             </>
@@ -11176,6 +11845,27 @@
                                 </div>
 
                                 {/* Grupo 2: Sin granularidad temporal */}
+                                <button className="menu-button" onClick={() => processOption('pareto-coste')} disabled={!data}>
+                                    <span className="number">📊</span>
+                                    Pareto de coste (ABC)
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Qué fármacos concentran el gasto (regla 80/20)
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('adherencia')} disabled={!data}>
+                                    <span className="number">📈</span>
+                                    Distribución de adherencia (MPR)
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Histograma poblacional de adherencia
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('switching')} disabled={!data}>
+                                    <span className="number">🔀</span>
+                                    Cambios de tratamiento (Sankey)
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Flujos de switching entre principios activos
+                                    </span>
+                                </button>
                                 <button className="menu-button" onClick={() => processOption('combinados')} disabled={!data}>
                                     <span className="number">🔗</span>
                                     Tratamientos combinados
@@ -11248,16 +11938,28 @@
                                                 <button className="export-btn" onClick={exportToCSV}>
                                                     📄 Exportar CSV
                                                 </button>
+                                                <button className="export-btn" onClick={() => downloadCanvasPNG('analysisChart', (results.title || 'grafico').replace(/[^\wáéíóúñ ]/gi, '').replace(/\s+/g, '_').slice(0, 60) + '.png')}>
+                                                    🖼️ Descargar PNG
+                                                </button>
                                             </>
                                         )}
                                     </div>
                                 </div>
 
+                                {results.note && (
+                                    <div style={{
+                                        background: '#eef7ff', border: '1px solid #b3d8f5', borderRadius: '8px',
+                                        padding: '10px 14px', marginBottom: '14px', fontSize: '0.82em', color: '#1a5276', lineHeight: 1.5
+                                    }}>
+                                        ℹ️ {results.note}
+                                    </div>
+                                )}
+
                                 {/* ══ BIOSIM DUAL: PA + Medicamento ══ */}
                                 {results.type === 'biosim-dual' && (() => {
                                     const renderTable = (data, colOrder, title, accentCol) => (
                                         <div style={{ marginBottom: '1.5rem' }}>
-                                            <h3 style={{ fontSize: '0.95rem', fontWeight: '700', color: 'var(--azul)', marginBottom: '0.5rem', paddingLeft: '0.25rem', borderLeft: '4px solid var(--azul-claro)', paddingLeft: '0.6rem' }}>
+                                            <h3 style={{ fontSize: '0.95rem', fontWeight: '700', color: 'var(--azul)', marginBottom: '0.5rem', borderLeft: '4px solid var(--azul-claro)', paddingLeft: '0.6rem' }}>
                                                 {title}
                                             </h3>
                                             <div className="table-container">
@@ -11448,8 +12150,10 @@
                                                         </select>
                                                         {/* Play/Pause/Reset */}
                                                         <button onClick={() => { setFrameIdx(0); setPlaying(false); }}
+                                                            aria-label="Reiniciar al primer periodo" title="Reiniciar"
                                                             style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', fontWeight: '700', borderRadius: 'var(--radius)', border: '2px solid var(--gris-borde)', background: 'var(--blanco)', cursor: 'pointer' }}>⏮</button>
                                                         <button onClick={() => setPlaying(p => !p)}
+                                                            aria-label={playing ? 'Pausar animación' : 'Reproducir animación'}
                                                             style={{
                                                                 padding: '0.4rem 1.2rem', fontSize: '0.95rem', fontWeight: '700',
                                                                 borderRadius: 'var(--radius)', border: 'none',
@@ -11459,6 +12163,7 @@
                                                             {playing ? '⏸ Pausa' : '▶ Play'}
                                                         </button>
                                                         <button onClick={() => setFrameIdx(p => Math.min(p + 1, totalFrames - 1))} disabled={frameIdx >= totalFrames - 1 || playing}
+                                                            aria-label="Avanzar un periodo" title="Avanzar"
                                                             style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', fontWeight: '700', borderRadius: 'var(--radius)', border: '2px solid var(--gris-borde)', background: 'var(--blanco)', cursor: 'pointer', opacity: (frameIdx >= totalFrames - 1 || playing) ? 0.4 : 1 }}>⏭</button>
                                                     </div>
                                                 </div>
@@ -11485,6 +12190,7 @@
                                                 {/* Slider */}
                                                 <div style={{ padding: '0.25rem 1.25rem 0.5rem' }}>
                                                     <input type="range" min={0} max={totalFrames - 1} value={frameIdx}
+                                                        aria-label="Seleccionar periodo de la animación"
                                                         onChange={e => { setFrameIdx(Number(e.target.value)); setPlaying(false); }}
                                                         style={{ width: '100%', accentColor: 'var(--azul-claro)' }} />
                                                 </div>
@@ -11736,8 +12442,10 @@
                                                             <option value={150}>Muy rápida</option>
                                                         </select>
                                                         <button onClick={() => { setFrameIdx(0); setPlaying(false); }}
+                                                            aria-label="Reiniciar al primer periodo" title="Reiniciar"
                                                             style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', fontWeight: '700', borderRadius: 'var(--radius)', border: '2px solid var(--gris-borde)', background: 'var(--blanco)', cursor: 'pointer' }}>⏮</button>
                                                         <button onClick={() => setPlaying(p => !p)}
+                                                            aria-label={playing ? 'Pausar animación' : 'Reproducir animación'}
                                                             style={{
                                                                 padding: '0.4rem 1.2rem', fontSize: '0.95rem', fontWeight: '700',
                                                                 borderRadius: 'var(--radius)', border: 'none',
@@ -11747,6 +12455,7 @@
                                                             {playing ? '⏸ Pausa' : '▶ Play'}
                                                         </button>
                                                         <button onClick={() => setFrameIdx(p => Math.min(p + 1, totalFrames - 1))} disabled={frameIdx >= totalFrames - 1 || playing}
+                                                            aria-label="Avanzar un periodo" title="Avanzar"
                                                             style={{ padding: '0.4rem 0.8rem', fontSize: '0.85rem', fontWeight: '700', borderRadius: 'var(--radius)', border: '2px solid var(--gris-borde)', background: 'var(--blanco)', cursor: 'pointer', opacity: (frameIdx >= totalFrames - 1 || playing) ? 0.4 : 1 }}>⏭</button>
                                                     </div>
                                                 </div>
@@ -11773,6 +12482,7 @@
                                                 {/* Slider */}
                                                 <div style={{ padding: '0.25rem 1.25rem 0.5rem' }}>
                                                     <input type="range" min={0} max={totalFrames - 1} value={frameIdx}
+                                                        aria-label="Seleccionar periodo de la animación"
                                                         onChange={e => { setFrameIdx(Number(e.target.value)); setPlaying(false); }}
                                                         style={{ width: '100%', accentColor: 'var(--azul-claro)' }} />
                                                 </div>
@@ -11832,7 +12542,7 @@
                                     <>
                                 {/* Gráfico del análisis */}
                                 <div className="analysis-chart-container">
-                                    <canvas id="analysisChart"></canvas>
+                                    <canvas id="analysisChart" role="img" aria-label="Gráfico del análisis seleccionado"></canvas>
                                 </div>
                                 
                                 <div className="table-container">
@@ -11867,9 +12577,17 @@
                                                     let aVal = a[sortConfig.key];
                                                     let bVal = b[sortConfig.key];
 
-                                                    // Convertir a número si es posible
-                                                    const aNum = typeof aVal === 'string' ? parseFloat(aVal.replace(/\./g, '').replace(',', '.')) : aVal;
-                                                    const bNum = typeof bVal === 'string' ? parseFloat(bVal.replace(/\./g, '').replace(',', '.')) : bVal;
+                                                    // Convertir a número solo si la celda es realmente numérica (admite formato ES/EN)
+                                                    const toNum = (v) => {
+                                                        if (typeof v === 'number') return v;
+                                                        if (typeof v === 'string') {
+                                                            const s = v.trim().replace(/[€%\s]/g, '');
+                                                            if (/\d/.test(s) && /^[+-]?[\d.,]+$/.test(s)) return parseNumES(v);
+                                                        }
+                                                        return NaN;
+                                                    };
+                                                    const aNum = toNum(aVal);
+                                                    const bNum = toNum(bVal);
 
                                                     if (!isNaN(aNum) && !isNaN(bNum)) {
                                                         return sortConfig.direction === 'asc' ? aNum - bNum : bNum - aNum;
@@ -11883,9 +12601,12 @@
                                                     return 0;
                                                 });
 
-                                                return sortedData.map((row, idx) => (
-                                                    <tr key={idx}>
-                                                        {(results.columnOrder || Object.keys(row)).map((key, i) => {
+                                                return sortedData.map((row, idx) => {
+                                                    const cols = results.columnOrder || Object.keys(row);
+                                                    const rowKey = (row[cols[0]] != null && row[cols[0]] !== '') ? String(row[cols[0]]) : `row-${idx}`;
+                                                    return (
+                                                    <tr key={rowKey}>
+                                                        {cols.map((key, i) => {
                                                             const value = row[key];
                                                             const isFirstColumn = i === 0;
                                                             const isPatientIdColumn = key === 'Id de los pacientes';
@@ -11947,7 +12668,8 @@
                                                             );
                                                         })}
                                                     </tr>
-                                                ));
+                                                    );
+                                                });
                                             })()}
                                         </tbody>
                                     </table>
@@ -12136,7 +12858,7 @@
                                                                         {row['Cantidad'] || '-'}
                                                                     </td>
                                                                     <td style={{padding: '10px 15px', textAlign: 'right', whiteSpace: 'nowrap'}}>
-                                                                        {(parseFloat(row['Coste Dispensación']) || 0).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €
+                                                                        {(parseNumES(row['Coste Dispensación'])).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €
                                                                     </td>
                                                                     <td style={{padding: '10px 15px'}}>
                                                                         {row['Servicio Prescriptor'] || '-'}
@@ -12169,7 +12891,7 @@
                                                         <div style={{fontSize: '1.4em', fontWeight: '700', color: '#1a5276'}}>{tto.totalCoste.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €</div>
                                                     </div>
                                                     <div style={{textAlign: 'center'}}>
-                                                        <div style={{fontSize: '0.85em', color: '#666', marginBottom: '5px'}}>Adherencia (MPR)</div>
+                                                        <div style={{fontSize: '0.85em', color: '#666', marginBottom: '5px'}}>Adherencia (MPR)<InfoTip text="MPR (Medication Possession Ratio): proporción de días cubiertos por la medicación dispensada entre la primera y la última dispensación del tratamiento. Se calcula a partir de la cantidad dispensada y la posología. ≥80% se considera buena adherencia." /></div>
                                                         {tto.adherencia !== null ? (
                                                             <div style={{
                                                                 fontSize: '1.4em',
@@ -12271,7 +12993,7 @@
                                                                         {row['Cantidad'] || '-'}
                                                                     </td>
                                                                     <td style={{padding: '8px 12px', textAlign: 'right', whiteSpace: 'nowrap', color: '#c0392b'}}>
-                                                                        {(parseFloat(row['Coste Dispensación']) || 0).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €
+                                                                        {(parseNumES(row['Coste Dispensación'])).toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2})} €
                                                                     </td>
                                                                 </tr>
                                                             ))}
@@ -12357,7 +13079,7 @@
 
                                             {/* Cohorte */}
                                             <div style={{marginBottom: '18px'}}>
-                                                <label style={{display: 'block', fontWeight: 600, color: '#1a5276', marginBottom: '8px'}}>3. Población a analizar:</label>
+                                                <label style={{display: 'block', fontWeight: 600, color: '#1a5276', marginBottom: '8px'}}>3. Población a analizar:<InfoTip text="Naive: pacientes que inician el fármaco sin haber recibido antes ningún tratamiento de la misma clase dentro del universo de datos analizado. No naive: pacientes que cambian desde otro tratamiento previo. 'Todos' combina ambos grupos." /></label>
                                                 <div style={{display: 'flex', gap: '10px', flexWrap: 'wrap'}}>
                                                     {[['all', 'Todos (naive + cambios)'], ['naive', 'Solo naive'], ['noNaive', 'Solo no naive']].map(([val, lbl]) => (
                                                         <button key={val}
@@ -12498,7 +13220,7 @@
                                                 {/* Gráfica KM */}
                                                 <div style={{background: '#fff', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '20px', marginBottom: '24px'}}>
                                                     <div style={{height: '420px'}}>
-                                                        <canvas id="kmChart"></canvas>
+                                                        <canvas id="kmChart" role="img" aria-label="Curva de persistencia de Kaplan-Meier con intervalo de confianza del 95%"></canvas>
                                                     </div>
                                                     {/* Números en riesgo (estándar en publicaciones Kaplan-Meier) */}
                                                     <div style={{overflowX: 'auto', marginTop: '16px'}}>
@@ -12587,7 +13309,7 @@
 
                                                         {/* Mediana de persistencia */}
                                                         <div style={{background: '#eef7ff', border: '1px solid #b3d8f5', borderRadius: '8px', padding: '10px 14px', marginBottom: '14px', fontSize: '0.9em', color: '#1a5276'}}>
-                                                            <strong>Mediana de persistencia:</strong>{' '}
+                                                            <strong>Mediana de persistencia:</strong><InfoTip text="Tiempo (estimado por Kaplan-Meier) en el que la mitad de los pacientes de la cohorte han discontinuado el tratamiento, es decir, cuando la curva de persistencia cruza el 50%. Si la curva no baja del 50% en el periodo observado, la mediana 'no se alcanza'." />{' '}
                                                             {m.km.medianReached
                                                                 ? <span>{m.km.median} días (~{(m.km.median / 30.4375).toFixed(1)} meses) — tiempo en el que la persistencia cae al 50%.</span>
                                                                 : <span>no alcanzada (la persistencia no desciende por debajo del 50% dentro del período observado).</span>}
@@ -12600,9 +13322,9 @@
                                                                 <thead><tr style={{background: '#1B4354', color: '#fff'}}>
                                                                     <th style={{padding: '6px 12px', textAlign: 'left'}}>Tiempo</th>
                                                                     <th style={{padding: '6px 12px', textAlign: 'right'}}>En riesgo</th>
-                                                                    <th style={{padding: '6px 12px', textAlign: 'right'}}>Persistentes (est.)</th>
+                                                                    <th style={{padding: '6px 12px', textAlign: 'right'}}>Persistentes (est.)<InfoTip text="Estimación del número de pacientes que continúan en tratamiento = S(t) × n inicial. Es una estimación de Kaplan-Meier, no un recuento exacto: puede diferir del número real 'en riesgo' por la censura." /></th>
                                                                     <th style={{padding: '6px 12px', textAlign: 'right'}}>Persistencia (%)</th>
-                                                                    <th style={{padding: '6px 12px', textAlign: 'right'}}>IC 95%</th>
+                                                                    <th style={{padding: '6px 12px', textAlign: 'right'}}>IC 95%<InfoTip text="Intervalo de confianza del 95% de la persistencia estimada, calculado por transformación log-log (varianza de Greenwood). Indica el margen de incertidumbre: cuanto más estrecho, más fiable la estimación." /></th>
                                                                 </tr></thead>
                                                                 <tbody>
                                                                     {m.points.map(p => (
