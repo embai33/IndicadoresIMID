@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#1a5276">
-    <title>Dashboard analizador de dispensaciones IMID - V34</title>
+    <title>Dashboard analizador de dispensaciones IMID - V35</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -870,6 +870,13 @@
             const [persistResults, setPersistResults] = useState(null);
             const [persistError, setPersistError] = useState('');
             const [persistDetailMed, setPersistDetailMed] = useState(null); // medicamento cuyo detalle de pacientes se muestra en el modal
+            const [sankeySrcSet, setSankeySrcSet] = useState(null);   // Sankey: fármacos de ORIGEN (A) a incluir. null = todos
+            const [sankeySrcSearch, setSankeySrcSearch] = useState(''); // buscador del menú de fármacos de origen del Sankey
+            const [pathStartDate, setPathStartDate] = useState('');   // Esquemas: fecha de inicio (criterio naïve, con lookback)
+            const [pathCohort, setPathCohort] = useState('all');      // Esquemas: 'all' | 'naive' | 'noNaive'
+            const [pathLines, setPathLines] = useState(4);            // Esquemas: nº de líneas de tratamiento a mostrar
+            const [pathSrcSet, setPathSrcSet] = useState(null);       // Esquemas: fármacos de ORIGEN (L1) a incluir. null = todos
+            const [pathSrcSearch, setPathSrcSearch] = useState('');   // buscador del menú de fármacos de origen del esquema
             const [filterOptions, setFilterOptions] = useState({
                 years: [],
                 services: [],
@@ -1882,8 +1889,9 @@
             const createAnalysisChart = (results, chartId) => {
                 if (window.analysisChart) {
                     try { window.analysisChart.destroy(); } catch(e) {}
+                    window.analysisChart = null;
                 }
-                
+
                 const canvas = document.getElementById(chartId);
                 if (!canvas || !results || !results.data || results.data.length === 0) return;
                 
@@ -2170,6 +2178,53 @@
                         });
                     } catch (e) {
                         console.warn('No se pudo dibujar el Sankey:', e.message);
+                    }
+                    return;
+                }
+                else if (results.type === 'pathway' && results.sankeyData && results.sankeyData.flows.length) {
+                    // Sankey multinivel por línea de tratamiento (esquemas a lo largo del tiempo)
+                    let sankeyReady = false;
+                    try { sankeyReady = !!Chart.registry.controllers.get('sankey'); } catch (e) { sankeyReady = false; }
+                    if (!sankeyReady) { console.warn('Plugin Sankey no disponible: se muestra solo la tabla.'); return; }
+                    const sd = results.sankeyData;
+                    const palette = ['#2980b9','#27ae60','#e67e22','#8e44ad','#16a085','#c0392b','#2c3e50','#d35400','#7f8c8d','#1a5276','#f39c12','#2ecc71'];
+                    const colorOf = (name) => {
+                        if (name === 'Naïve') return '#27ae60';
+                        if (name === 'Prevalente') return '#7f8c8d';
+                        if (name === '⋯ posteriores') return '#bdc3c7';
+                        let h = 0; const s = String(name || '');
+                        for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+                        return palette[h % palette.length];
+                    };
+                    const lbl = (id) => sd.labels[id] || id;
+                    const colName = (id) => { const c = sd.columns[id]; return c === 0 ? 'Inicio' : (String(id).endsWith('|posteriores') ? 'Posteriores' : 'L' + c); };
+                    try {
+                        window.analysisChart = new Chart(ctx, {
+                            type: 'sankey',
+                            data: {
+                                datasets: [{
+                                    label: 'Esquemas de tratamiento',
+                                    data: sd.flows,
+                                    labels: sd.labels,
+                                    column: sd.columns,
+                                    colorFrom: (c) => colorOf(lbl(c.raw && c.raw.from)),
+                                    colorTo: (c) => colorOf(lbl(c.raw && c.raw.to)),
+                                    colorMode: 'gradient',
+                                    borderWidth: 0,
+                                    nodeWidth: 12
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                plugins: {
+                                    title: { display: true, text: 'Esquemas de tratamiento por línea (naïve/prevalente → L1 → L2 → …)' },
+                                    legend: { display: false },
+                                    tooltip: { callbacks: { label: (c) => `${lbl(c.raw.from)} (${colName(c.raw.from)}) → ${lbl(c.raw.to)} (${colName(c.raw.to)}): ${c.raw.flow} pacientes` } }
+                                }
+                            }
+                        });
+                    } catch (e) {
+                        console.warn('No se pudo dibujar el Sankey de esquemas:', e.message);
                     }
                     return;
                 }
@@ -9473,7 +9528,10 @@
             };
 
             // Flujos de cambio de tratamiento (switching) entre principios activos
-            const calculateSwitching = (dataToProcess) => {
+            // selectedSources: Set de fármacos de ORIGEN (A) a incluir. null = todos.
+            //   Las trayectorias se calculan SIEMPRE con todas las dispensaciones activas;
+            //   el filtro solo restringe qué flujos (aquellos cuyo origen A está seleccionado) se muestran.
+            const calculateSwitching = (dataToProcess, selectedSources) => {
                 const validData = dataToProcess.filter(row =>
                     row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== '' && row['Descripción Principio Activo']
                 );
@@ -9484,9 +9542,8 @@
                     byPatient.get(id).push(row);
                 });
 
-                const transitions = {};       // "from→to" -> nº pacientes
-                let pacientesQueCambian = new Set();
-                let totalCambios = 0;
+                const transitions = {};              // "from→to" -> nº ocurrencias
+                const patientsBySource = new Map();  // origen A -> Set(idPaciente)
 
                 byPatient.forEach((rows, id) => {
                     const sorted = rows.filter(r => (parseInt(r['Cantidad']) || 0) > 0).sort((a, b) => {
@@ -9501,18 +9558,34 @@
                         if (seq.length === 0 || seq[seq.length - 1] !== pa) seq.push(pa);
                     });
                     for (let i = 0; i < seq.length - 1; i++) {
-                        const key = seq[i] + '→' + seq[i + 1];
-                        transitions[key] = (transitions[key] || 0) + 1;
-                        totalCambios++;
-                        pacientesQueCambian.add(id);
+                        const from = seq[i], to = seq[i + 1];
+                        transitions[from + '→' + to] = (transitions[from + '→' + to] || 0) + 1;
+                        if (!patientsBySource.has(from)) patientsBySource.set(from, new Set());
+                        patientsBySource.get(from).add(id);
                     }
                 });
 
-                const entries = Object.entries(transitions)
+                const allEntries = Object.entries(transitions)
                     .map(([k, v]) => { const [from, to] = k.split('→'); return { from, to, count: v }; })
                     .sort((a, b) => b.count - a.count);
 
-                // Tabla (todos los flujos)
+                // Lista de fármacos de ORIGEN disponibles para el menú (los que actúan como A en alguna transición)
+                const allSources = [...new Set(allEntries.map(e => e.from))].sort((a, b) => a.localeCompare(b, 'es'));
+
+                // Filtro por fármaco de ORIGEN (A). null => todos los orígenes
+                const sel = selectedSources || null;
+                const entries = sel ? allEntries.filter(e => sel.has(e.from)) : allEntries;
+
+                // Estadísticas del subconjunto mostrado
+                const shownPatients = new Set();
+                if (sel) {
+                    sel.forEach(s => { const set = patientsBySource.get(s); if (set) set.forEach(id => shownPatients.add(id)); });
+                } else {
+                    patientsBySource.forEach(set => set.forEach(id => shownPatients.add(id)));
+                }
+                const shownCambios = entries.reduce((s, e) => s + e.count, 0);
+
+                // Tabla (todos los flujos mostrados)
                 const data = entries.map(e => ({
                     'Desde': e.from,
                     'Hacia': e.to,
@@ -9525,13 +9598,18 @@
                 const labels = {};
                 top.forEach(e => { labels['src:' + e.from] = e.from; labels['dst:' + e.to] = e.to; });
 
+                const filtroActivo = !!sel;
+                const tituloBase = `Cambios de tratamiento · ${shownPatients.size} pacientes cambian · ${shownCambios} cambios · ${entries.length} transiciones distintas`;
+
                 return {
                     type: 'sankey',
-                    title: `Cambios de tratamiento · ${pacientesQueCambian.size} pacientes cambian · ${totalCambios} cambios · ${entries.length} transiciones distintas`,
+                    title: filtroActivo ? tituloBase + ` · filtrado a ${sel.size} fármaco(s) de origen` : tituloBase,
                     sankeyData: { flows, labels },
                     data,
                     columnOrder: ['Desde', 'Hacia', 'Pacientes'],
-                    note: `Cada flujo representa pacientes que pasaron de un principio activo (izquierda, "origen") a otro (derecha, "destino") en episodios consecutivos de tratamiento. Se cuentan todas las transiciones entre principios activos distintos. El diagrama muestra los ${Math.min(30, entries.length)} flujos más frecuentes; la tabla incluye todos.`
+                    allSources,                          // para poblar el menú de selección de origen
+                    sourceFilterCount: sel ? sel.size : 0,
+                    note: `Cada flujo representa pacientes que pasaron de un principio activo (izquierda, "origen") a otro (derecha, "destino") en episodios consecutivos de tratamiento. Las trayectorias se calculan con TODAS las dispensaciones activas; el menú "Fármacos de origen (A)" solo restringe qué flujos se muestran (aquellos cuyo origen A está seleccionado), sin alterar el cálculo. El destino B puede ser cualquier fármaco. El diagrama muestra los ${Math.min(30, entries.length)} flujos más frecuentes; la tabla incluye todos los mostrados.`
                 };
             };
 
@@ -9644,8 +9722,14 @@
                             result = calculateAdherenceDistribution(dataToProcess);
                             break;
                         case 'switching':
-                            result = calculateSwitching(dataToProcess);
+                            result = calculateSwitching(dataToProcess, sankeySrcSet);
                             break;
+                        case 'pathways': {
+                            let sd = pathStartDate;
+                            if (!sd) { sd = defaultPathStart(dataToProcess); if (sd) setPathStartDate(sd); }
+                            result = calculatePathways(dataToProcess, { startDate: sd, cohort: pathCohort, nLines: pathLines, sources: pathSrcSet });
+                            break;
+                        }
                         case 'combinados':
                             result = calculateCombinedTreatments(dataToProcess);
                             break;
@@ -9683,8 +9767,191 @@
                 }, 500);
             };
 
+            // Recalcula y redibuja el Sankey de switching con un nuevo conjunto de fármacos de origen (A).
+            // nextSet: Set de orígenes seleccionados, o null = todos. Las trayectorias no se alteran.
+            const recomputeSankey = (nextSet) => {
+                setSankeySrcSet(nextSet);
+                if (!data) return;
+                const dataToProcess = applyFilters() || data;
+                const result = calculateSwitching(dataToProcess, nextSet);
+                setResults(result);
+                setTimeout(() => {
+                    if (document.getElementById('analysisChart')) {
+                        createAnalysisChart(result, 'analysisChart');
+                    }
+                }, 80);
+            };
+
+            // Primera fecha de dispensación válida de un dataset cualquiera
+            const firstDateOf = (arr) => {
+                let m = null;
+                (arr || []).forEach(r => {
+                    const d = r['Fecha Dispensación'];
+                    if (d instanceof Date && !isNaN(d)) { if (!m || d < m) m = d; }
+                });
+                return m;
+            };
+
+            // Fecha de inicio por defecto para el criterio naïve = primera dispensación activa + lavado (4 meses)
+            const defaultPathStart = (dataToProcess) => {
+                const first = firstDateOf(dataToProcess);
+                if (!first) return '';
+                const d = new Date(first);
+                d.setMonth(d.getMonth() + PERSIST_WASHOUT_MONTHS);
+                // Formato YYYY-MM-DD con componentes locales (evita desfase por zona horaria)
+                const mm = String(d.getMonth() + 1).padStart(2, '0');
+                const dd = String(d.getDate()).padStart(2, '0');
+                return `${d.getFullYear()}-${mm}-${dd}`;
+            };
+
+            // Esquemas de tratamiento a lo largo del tiempo (Sankey multinivel por línea).
+            // Las trayectorias usan TODAS las dispensaciones activas. El nodo de entrada distingue
+            // naïve (1ª dispensación >= fecha de inicio, con lookback) de prevalente (ya en tto).
+            // params: { startDate:'YYYY-MM-DD', cohort:'all'|'naive'|'noNaive', nLines:number, sources:Set|null }
+            //   sources = fármacos de ORIGEN (L1) a incluir; solo se dibujan trayectorias cuyo
+            //   primer tratamiento (L1) está en la selección. Las líneas siguientes pueden ser cualquiera.
+            const calculatePathways = (dataToProcess, params) => {
+                const f = 'Descripción Principio Activo';
+                const N = Math.max(2, Math.min(8, parseInt(params.nLines) || 4));
+                const validData = dataToProcess.filter(row =>
+                    row['Fecha Dispensación'] instanceof Date && !isNaN(row['Fecha Dispensación']) &&
+                    row['Id'] != null && String(row['Id']).trim() !== '' && row[f]
+                );
+
+                const startStr = params.startDate || defaultPathStart(validData);
+                const startDate = startStr ? new Date(startStr + 'T00:00:00') : null;
+
+                const byPatient = new Map();
+                validData.forEach(row => {
+                    if ((parseInt(row['Cantidad']) || 0) <= 0) return; // ignorar devoluciones
+                    const id = String(row['Id']).trim();
+                    if (!byPatient.has(id)) byPatient.set(id, []);
+                    byPatient.get(id).push(row);
+                });
+
+                const flowMap = new Map();   // "from|||to" -> nº pacientes
+                const labels = {};           // nodeId -> etiqueta visible
+                const columns = {};          // nodeId -> índice de columna
+                const sourceSet = new Set(); // fármacos de origen (L1) disponibles para el menú
+                const addFlow = (from, to) => { const k = from + '|||' + to; flowMap.set(k, (flowMap.get(k) || 0) + 1); };
+                const reg = (id, col, label) => { columns[id] = col; labels[id] = label; };
+
+                const selSrc = params.sources || null; // null = todos los orígenes; Set (aunque vacío) = solo los seleccionados
+
+                let nPacientes = 0, nNaive = 0, nPrev = 0, nBeyond = 0;
+
+                byPatient.forEach((rows) => {
+                    rows.sort((a, b) => {
+                        const da = a['Fecha Dispensación'].getTime(), db = b['Fecha Dispensación'].getTime();
+                        if (da !== db) return da - db;
+                        return (a['Descripción Producto Dispensado'] || '').localeCompare(b['Descripción Producto Dispensado'] || '');
+                    });
+                    // Secuencia de PA en episodios contiguos
+                    const seq = [];
+                    rows.forEach(row => {
+                        const pa = (row[f] || 'DESCONOCIDO').trim();
+                        if (seq.length === 0 || seq[seq.length - 1] !== pa) seq.push(pa);
+                    });
+                    if (seq.length === 0) return;
+
+                    // Fármaco de origen (L1) del paciente — disponible en el menú independientemente de los filtros
+                    sourceSet.add(seq[0]);
+
+                    const firstDisp = rows[0]['Fecha Dispensación'];
+                    const naive = startDate ? (firstDisp >= startDate) : true;
+
+                    if (params.cohort === 'naive' && !naive) return;
+                    if (params.cohort === 'noNaive' && naive) return;
+
+                    // Filtro por fármaco de ORIGEN (L1): solo trayectorias cuyo primer tratamiento está seleccionado
+                    if (selSrc && !selSrc.has(seq[0])) return;
+
+                    nPacientes++; if (naive) nNaive++; else nPrev++;
+
+                    const entryLabel = naive ? 'Naïve' : 'Prevalente';
+                    const entryId = 'c0|' + entryLabel;
+                    reg(entryId, 0, entryLabel);
+
+                    // Entrada → L1
+                    const l1Id = 'c1|' + seq[0];
+                    reg(l1Id, 1, seq[0]);
+                    addFlow(entryId, l1Id);
+
+                    // L1 → L2 → … hasta N columnas de fármaco
+                    const lim = Math.min(N, seq.length);
+                    for (let j = 1; j < lim; j++) {
+                        const aId = 'c' + j + '|' + seq[j - 1];
+                        const bId = 'c' + (j + 1) + '|' + seq[j];
+                        reg(aId, j, seq[j - 1]);
+                        reg(bId, j + 1, seq[j]);
+                        addFlow(aId, bId);
+                    }
+
+                    // Cambios más allá de la última línea mostrada → nodo agrupado
+                    if (seq.length > N) {
+                        nBeyond++;
+                        const aId = 'c' + N + '|' + seq[N - 1];
+                        const postId = 'c' + (N + 1) + '|posteriores';
+                        reg(aId, N, seq[N - 1]);
+                        reg(postId, N + 1, '⋯ posteriores');
+                        addFlow(aId, postId);
+                    }
+                });
+
+                const flows = [...flowMap.entries()]
+                    .map(([k, v]) => { const [from, to] = k.split('|||'); return { from, to, flow: v }; })
+                    .sort((a, b) => b.flow - a.flow);
+
+                // Tabla legible
+                const colName = (c) => c === 0 ? 'Inicio' : (c === N + 1 ? 'Posteriores' : 'L' + c);
+                const dataTable = flows.map(fl => ({
+                    'Etapa desde': colName(columns[fl.from]),
+                    'Desde': labels[fl.from],
+                    'Etapa hacia': colName(columns[fl.to]),
+                    'Hacia': labels[fl.to],
+                    'Pacientes': fl.flow
+                }));
+
+                const cohLabel = params.cohort === 'naive' ? 'solo naïve' : (params.cohort === 'noNaive' ? 'solo no-naïve' : 'naïve + prevalentes');
+                const fechaTxt = startDate ? startDate.toLocaleDateString('es-ES') : '—';
+                const allSources = [...sourceSet].sort((a, b) => a.localeCompare(b, 'es'));
+                const srcTxt = selSrc ? ` · origen (L1) filtrado a ${selSrc.size} fármaco(s)` : '';
+
+                return {
+                    type: 'pathway',
+                    title: `Esquemas de tratamiento · ${nPacientes} pacientes (${nNaive} naïve / ${nPrev} prevalentes) · ${N} líneas · ${cohLabel}${srcTxt}`,
+                    sankeyData: { flows, labels, columns },
+                    data: dataTable,
+                    columnOrder: ['Etapa desde', 'Desde', 'Etapa hacia', 'Hacia', 'Pacientes'],
+                    allSources,                          // fármacos de inicio (L1) para el menú de origen
+                    sourceFilterCount: selSrc ? selSrc.size : 0,
+                    note: `Cada trayectoria se construye con TODAS las dispensaciones activas: L1 = primer tratamiento observado, L2 = tras el 1.er cambio, y así sucesivamente (se muestran ${N} líneas; los cambios posteriores se agrupan en "posteriores", ${nBeyond} pacientes). El nodo de entrada distingue "Naïve" (primera dispensación ≥ ${fechaTxt}, con ≥${PERSIST_WASHOUT_MONTHS} meses de lookback, criterio del bloque de persistencia) de "Prevalente" (ya en tratamiento al inicio de la ventana). El menú "Fármacos de origen (L1)" restringe qué trayectorias se muestran según su primer tratamiento; las líneas posteriores pueden ser cualquier fármaco. Cada flujo = nº de pacientes que siguen esa transición entre líneas.`
+                };
+            };
+
+            // Recalcula y redibuja el Sankey de esquemas de tratamiento con nuevos parámetros.
+            const recomputePathway = (ov = {}) => {
+                const startDate = ov.startDate !== undefined ? ov.startDate : pathStartDate;
+                const cohort = ov.cohort !== undefined ? ov.cohort : pathCohort;
+                const nLines = ov.nLines !== undefined ? ov.nLines : pathLines;
+                const sources = ov.sources !== undefined ? ov.sources : pathSrcSet;
+                if (ov.startDate !== undefined) setPathStartDate(ov.startDate);
+                if (ov.cohort !== undefined) setPathCohort(ov.cohort);
+                if (ov.nLines !== undefined) setPathLines(ov.nLines);
+                if (ov.sources !== undefined) setPathSrcSet(ov.sources);
+                if (!data) return;
+                const dataToProcess = applyFilters() || data;
+                const result = calculatePathways(dataToProcess, { startDate, cohort, nLines, sources });
+                setResults(result);
+                setTimeout(() => {
+                    if (document.getElementById('analysisChart')) {
+                        createAnalysisChart(result, 'analysisChart');
+                    }
+                }, 80);
+            };
+
             const calculateTotals = (dataToProcess) => {
-                const validData = dataToProcess.filter(row => 
+                const validData = dataToProcess.filter(row =>
                     row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== ''
                 );
 
@@ -11249,7 +11516,7 @@
                     <div className="header">
                         <div className="header-text">
                             <h1>🏥 Dashboard analizador de dispensaciones IMID</h1>
-                            <p>Sistema de indicadores cuantitativos · Farmacia Hospitalaria · H. U. i P. La Fe · <strong>v34</strong></p>
+                            <p>Sistema de indicadores cuantitativos · Farmacia Hospitalaria · H. U. i P. La Fe · <strong>v35</strong></p>
                         </div>
                         {(() => {
                             const activeCount = [filters.year, filters.service, filters.pathology, filters.activeIngredient, filters.dateFrom, filters.dateTo].filter(Boolean).length + (paFilterMode === 'selection' && selectedPASet.size > 0 ? 1 : 0);
@@ -11864,6 +12131,13 @@
                                     Cambios de tratamiento (Sankey)
                                     <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
                                         Flujos de switching entre principios activos
+                                    </span>
+                                </button>
+                                <button className="menu-button" onClick={() => processOption('pathways')} disabled={!data}>
+                                    <span className="number">🧬</span>
+                                    Esquemas de tratamiento en el tiempo
+                                    <span style={{display:'block', fontSize:'0.75rem', opacity:0.75, marginTop:'4px', fontWeight:'400'}}>
+                                        Secuencias por línea (naïve→L1→L2→…) con todos los cambios
                                     </span>
                                 </button>
                                 <button className="menu-button" onClick={() => processOption('combinados')} disabled={!data}>
@@ -12540,6 +12814,158 @@
                                 {/* ══ STANDARD chart + table ══ */}
                                 {!['racing','racing-pa','biosim-dual'].includes(results.type) && (
                                     <>
+                                {/* ══ Menú de fármacos de ORIGEN (A) para el Sankey ══ */}
+                                {results.type === 'sankey' && results.allSources && (() => {
+                                    const total = results.allSources.length;
+                                    const nSel = sankeySrcSet === null ? total : sankeySrcSet.size;
+                                    const isChecked = (s) => sankeySrcSet === null ? true : sankeySrcSet.has(s);
+                                    const toggle = (s) => {
+                                        const base = sankeySrcSet === null ? new Set(results.allSources) : new Set(sankeySrcSet);
+                                        if (base.has(s)) base.delete(s); else base.add(s);
+                                        recomputeSankey(base);
+                                    };
+                                    const q = sankeySrcSearch.trim().toLowerCase();
+                                    const visibles = q ? results.allSources.filter(s => s.toLowerCase().includes(q)) : results.allSources;
+                                    return (
+                                        <div style={{ background: 'var(--blanco)', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)', marginBottom: '16px', overflow: 'hidden' }}>
+                                            <div style={{ padding: '0.6rem 0.8rem', borderBottom: '1px solid var(--gris-borde)', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                                <strong style={{ fontSize: '0.9rem', color: 'var(--azul)' }}>Fármacos de origen (A) a incluir</strong>
+                                                <InfoTip text="Las trayectorias de cada paciente se calculan con TODAS las dispensaciones activas. Aquí solo eliges qué fármacos de ORIGEN (A) se muestran: se dibuja el flujo A→B únicamente si A está seleccionado. El destino B puede ser cualquier fármaco, esté o no seleccionado." />
+                                                <span style={{ fontSize: '0.78rem', color: 'var(--texto-sec)', marginLeft: 'auto' }}>
+                                                    {sankeySrcSet === null ? `Todos (${total})` : `${nSel} de ${total} seleccionados`}
+                                                </span>
+                                            </div>
+                                            <div style={{ padding: '0.5rem 0.8rem', borderBottom: '1px solid var(--gris-borde)', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                <input
+                                                    type="text"
+                                                    placeholder="🔍 Buscar fármaco de origen..."
+                                                    value={sankeySrcSearch}
+                                                    onChange={e => setSankeySrcSearch(e.target.value)}
+                                                    style={{ width: '100%', padding: '0.4rem 0.5rem', fontSize: '0.82rem', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)' }}
+                                                />
+                                                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                                    <button
+                                                        onClick={() => recomputeSankey(null)}
+                                                        style={{ flex: 1, padding: '0.3rem', fontSize: '0.75rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--verde)', background: 'var(--blanco)', color: 'var(--verde)', cursor: 'pointer' }}
+                                                    >Todos</button>
+                                                    <button
+                                                        onClick={() => recomputeSankey(new Set())}
+                                                        style={{ flex: 1, padding: '0.3rem', fontSize: '0.75rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--gris-borde)', background: 'var(--blanco)', color: 'var(--texto-sec)', cursor: 'pointer' }}
+                                                    >Ninguno</button>
+                                                </div>
+                                            </div>
+                                            <div style={{ maxHeight: '180px', overflowY: 'auto', padding: '0.4rem 0.8rem' }}>
+                                                {visibles.length === 0 && (
+                                                    <div style={{ fontSize: '0.8rem', color: 'var(--texto-sec)', padding: '0.4rem 0' }}>Sin coincidencias.</div>
+                                                )}
+                                                {visibles.map(s => (
+                                                    <label key={s} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.2rem 0', fontSize: '0.82rem', cursor: 'pointer' }}>
+                                                        <input type="checkbox" checked={isChecked(s)} onChange={() => toggle(s)} />
+                                                        <span>{s}</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+
+                                {/* ══ Controles del Sankey de esquemas de tratamiento ══ */}
+                                {results.type === 'pathway' && (
+                                    <div style={{ background: 'var(--blanco)', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)', marginBottom: '16px', padding: '0.7rem 0.9rem', display: 'flex', flexWrap: 'wrap', gap: '1.2rem', alignItems: 'flex-end' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                            <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--texto-sec)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                                Fecha de inicio (naïve)
+                                                <InfoTip text="Umbral del criterio naïve (bloque de persistencia): un paciente es naïve si su PRIMERA dispensación es igual o posterior a esta fecha, garantizando un período de lookback previo. Antes de esta fecha se consideran prevalentes (ya en tratamiento). Por defecto = primera dispensación activa + 4 meses de lavado." />
+                                            </label>
+                                            <input
+                                                type="date"
+                                                value={pathStartDate}
+                                                onChange={(e) => recomputePathway({ startDate: e.target.value })}
+                                                style={{ padding: '0.4rem 0.5rem', fontSize: '0.85rem', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)' }}
+                                            />
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                            <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--texto-sec)' }}>Cohorte</label>
+                                            <select
+                                                value={pathCohort}
+                                                onChange={(e) => recomputePathway({ cohort: e.target.value })}
+                                                style={{ padding: '0.4rem 0.5rem', fontSize: '0.85rem', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)' }}
+                                            >
+                                                <option value="all">Todos (naïve + prevalentes)</option>
+                                                <option value="naive">Solo naïve</option>
+                                                <option value="noNaive">Solo no-naïve (prevalentes)</option>
+                                            </select>
+                                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                                            <label style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--texto-sec)' }}>Nº de líneas</label>
+                                            <select
+                                                value={pathLines}
+                                                onChange={(e) => recomputePathway({ nLines: parseInt(e.target.value) })}
+                                                style={{ padding: '0.4rem 0.5rem', fontSize: '0.85rem', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)' }}
+                                            >
+                                                {[2, 3, 4, 5, 6, 7, 8].map(n => (
+                                                    <option key={n} value={n}>{n} líneas (L1–L{n})</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* ══ Menú de fármacos de ORIGEN (L1) para el esquema de tratamiento ══ */}
+                                {results.type === 'pathway' && results.allSources && (() => {
+                                    const total = results.allSources.length;
+                                    const nSel = pathSrcSet === null ? total : pathSrcSet.size;
+                                    const isChecked = (s) => pathSrcSet === null ? true : pathSrcSet.has(s);
+                                    const toggle = (s) => {
+                                        const base = pathSrcSet === null ? new Set(results.allSources) : new Set(pathSrcSet);
+                                        if (base.has(s)) base.delete(s); else base.add(s);
+                                        recomputePathway({ sources: base });
+                                    };
+                                    const q = pathSrcSearch.trim().toLowerCase();
+                                    const visibles = q ? results.allSources.filter(s => s.toLowerCase().includes(q)) : results.allSources;
+                                    return (
+                                        <div style={{ background: 'var(--blanco)', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)', marginBottom: '16px', overflow: 'hidden' }}>
+                                            <div style={{ padding: '0.6rem 0.8rem', borderBottom: '1px solid var(--gris-borde)', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                                <strong style={{ fontSize: '0.9rem', color: 'var(--azul)' }}>Fármacos de origen (L1) a incluir</strong>
+                                                <InfoTip text="Restringe qué trayectorias se muestran según su PRIMER tratamiento (L1). Se dibuja la trayectoria completa de un paciente solo si su fármaco de inicio (L1) está seleccionado; las líneas posteriores (L2, L3…) pueden ser cualquier fármaco. Las trayectorias se calculan siempre con todas las dispensaciones activas." />
+                                                <span style={{ fontSize: '0.78rem', color: 'var(--texto-sec)', marginLeft: 'auto' }}>
+                                                    {pathSrcSet === null ? `Todos (${total})` : `${nSel} de ${total} seleccionados`}
+                                                </span>
+                                            </div>
+                                            <div style={{ padding: '0.5rem 0.8rem', borderBottom: '1px solid var(--gris-borde)', display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                                                <input
+                                                    type="text"
+                                                    placeholder="🔍 Buscar fármaco de origen (L1)..."
+                                                    value={pathSrcSearch}
+                                                    onChange={e => setPathSrcSearch(e.target.value)}
+                                                    style={{ width: '100%', padding: '0.4rem 0.5rem', fontSize: '0.82rem', border: '1px solid var(--gris-borde)', borderRadius: 'var(--radius)' }}
+                                                />
+                                                <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                                    <button
+                                                        onClick={() => recomputePathway({ sources: null })}
+                                                        style={{ flex: 1, padding: '0.3rem', fontSize: '0.75rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--verde)', background: 'var(--blanco)', color: 'var(--verde)', cursor: 'pointer' }}
+                                                    >Todos</button>
+                                                    <button
+                                                        onClick={() => recomputePathway({ sources: new Set() })}
+                                                        style={{ flex: 1, padding: '0.3rem', fontSize: '0.75rem', fontWeight: '600', borderRadius: 'var(--radius)', border: '1px solid var(--gris-borde)', background: 'var(--blanco)', color: 'var(--texto-sec)', cursor: 'pointer' }}
+                                                    >Ninguno</button>
+                                                </div>
+                                            </div>
+                                            <div style={{ maxHeight: '180px', overflowY: 'auto', padding: '0.4rem 0.8rem' }}>
+                                                {visibles.length === 0 && (
+                                                    <div style={{ fontSize: '0.8rem', color: 'var(--texto-sec)', padding: '0.4rem 0' }}>Sin coincidencias.</div>
+                                                )}
+                                                {visibles.map(s => (
+                                                    <label key={s} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.2rem 0', fontSize: '0.82rem', cursor: 'pointer' }}>
+                                                        <input type="checkbox" checked={isChecked(s)} onChange={() => toggle(s)} />
+                                                        <span>{s}</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+
                                 {/* Gráfico del análisis */}
                                 <div className="analysis-chart-container">
                                     <canvas id="analysisChart" role="img" aria-label="Gráfico del análisis seleccionado"></canvas>
@@ -12603,7 +13029,9 @@
 
                                                 return sortedData.map((row, idx) => {
                                                     const cols = results.columnOrder || Object.keys(row);
-                                                    const rowKey = (row[cols[0]] != null && row[cols[0]] !== '') ? String(row[cols[0]]) : `row-${idx}`;
+                                                    // Key compuesta única: evita colisiones cuando la 1ª columna se repite
+                                                    // (p. ej. "Etapa desde" en el Sankey de esquemas), que provocaban filas duplicadas.
+                                                    const rowKey = cols.map(c => row[c]).join('¦') + '#' + idx;
                                                     return (
                                                     <tr key={rowKey}>
                                                         {cols.map((key, i) => {
