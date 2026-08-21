@@ -1,0 +1,49 @@
+# ─────────────────────────────────────────────────────────────
+#  DATOS DE PACIENTES — NUNCA deben subirse al repositorio
+#  La aplicación procesa los datos solo en el navegador; los
+#  ficheros de dispensaciones no forman parte del código.
+# ─────────────────────────────────────────────────────────────
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.tsv
+*.ods
+
+# Informes y exportaciones generadas por la app
+Informe_*.pdf
+*_export.pdf
+
+# ─────────────────────────────────────────────────────────────
+#  Ficheros del sistema (macOS)
+# ─────────────────────────────────────────────────────────────
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+
+# ─────────────────────────────────────────────────────────────
+#  Configuración de Claude Code
+#  Contiene rutas absolutas de esta máquina; no se publica.
+# ─────────────────────────────────────────────────────────────
+.claude/
+
+# ─────────────────────────────────────────────────────────────
+#  Documentación interna de trabajo (no se publica)
+# ─────────────────────────────────────────────────────────────
+*.docx
+
+# ─────────────────────────────────────────────────────────────
+#  Copias de seguridad antiguas
+#  Ya no son necesarias: el historial de git cumple esa función.
+# ─────────────────────────────────────────────────────────────
+*_backup_*.html
+
+# ─────────────────────────────────────────────────────────────
+#  Temporales
+# ─────────────────────────────────────────────────────────────
+*.tmp
+*.bak
+~$*
