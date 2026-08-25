@@ -18,10 +18,28 @@ const cdnAfter = (head.match(/<script src="https:\/\//g) || []).length;
 console.log(`Etiquetas CDN eliminadas: ${cdnBefore} (quedan ${cdnAfter})`);
 if (cdnAfter !== 0) { console.error('ERROR: quedan referencias a CDN'); process.exit(1); }
 
-// 2) La versión la define el archivo fuente; aquí solo se comprueba que exista
-const mVer = head.match(/IMID - (V\d+)/);
-if (!mVer) { console.error('ERROR: el <title> del archivo fuente no indica versión (IMID - Vnn)'); process.exit(1); }
-console.log('Versión detectada en la fuente:', mVer[1]);
+// 2) La versión la define el archivo fuente. Se detecta por el patrón "Vnn" al final
+//    del <title>, sin depender del nombre de la aplicación (que puede cambiar).
+const mTitle = head.match(/<title>([^<]*)<\/title>/i);
+if (!mTitle) { console.error('ERROR: el archivo fuente no tiene <title>'); process.exit(1); }
+const mVer = mTitle[1].match(/\bV(\d+)\s*$/i);
+if (!mVer) {
+  console.error('ERROR: el <title> no termina con un número de versión.');
+  console.error('  <title> encontrado: "' + mTitle[1].trim() + '"');
+  console.error('  Se esperaba que terminase en "Vnn", por ejemplo: "VIGIA-IMID - V39".');
+  process.exit(1);
+}
+const version = 'V' + mVer[1];
+console.log('Versión detectada en la fuente:', version, '(título: "' + mTitle[1].trim() + '")');
+
+// Comprobar que el nombre del archivo de salida coincide con esa versión,
+// para no publicar por error un contenido con un número distinto al del nombre.
+const mOut = require('path').basename(OUT).match(/V(\d+)/i);
+if (mOut && ('V' + mOut[1]).toUpperCase() !== version.toUpperCase()) {
+  console.error('ERROR: la versión del archivo fuente (' + version + ') no coincide con la del archivo de salida (V' + mOut[1] + ').');
+  console.error('  Actualiza el <title> y la cabecera de la fuente, o corrige el nombre de salida.');
+  process.exit(1);
+}
 
 // 3) Nota de dependencias incrustadas (con licencias)
 const nota = `    <!--
@@ -39,6 +57,20 @@ const nota = `    <!--
 head = head.replace('</head>', nota + '</head>');
 
 // 4) Ensamblar los scripts en orden de dependencia
+// Coherencia entre la versión del <title> y la que se muestra en la cabecera de la
+// aplicación: son dos sitios distintos del archivo fuente y es fácil actualizar uno y
+// olvidar el otro.
+const mHdr = app.match(/createElement\("strong",\s*null,\s*"v(\d+)"\)/i);
+if (!mHdr) {
+  console.warn('AVISO: no se ha localizado la versión en la cabecera de la aplicación; no se ha podido comprobar la coherencia.');
+} else if (('V' + mHdr[1]).toUpperCase() !== version.toUpperCase()) {
+  console.error('ERROR: el <title> indica ' + version + ' pero la cabecera de la aplicación muestra v' + mHdr[1] + '.');
+  console.error('  Corrige ambos en fuente_analizador.html antes de construir.');
+  process.exit(1);
+} else {
+  console.log('Coherencia de versión verificada: título y cabecera coinciden (' + version + ').');
+}
+
 const LIBS = [
   ['react.js',        'React 18.2.0 — MIT'],
   ['react-dom.js',    'React-DOM 18.2.0 — MIT'],

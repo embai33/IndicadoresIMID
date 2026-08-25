@@ -3800,7 +3800,7 @@ function App() {
     pdf.setFontSize(10);
     pdf.setFont('helvetica', 'normal');
     pdf.setTextColor(80, 80, 80);
-    pdf.text('Hospital Universitari i Politècnic La Fe', titleX, 20, {
+    pdf.text('VIGIA-IMID · Hospital Universitari i Politècnic La Fe', titleX, 20, {
       align: 'center'
     });
 
@@ -6515,7 +6515,7 @@ function App() {
     pdf.setFont('helvetica', 'normal');
     pdf.setFontSize(8);
     setText(COLOR.muted);
-    pdf.text('INFORME EJECUTIVO  ·  IMID', M, 36);
+    pdf.text('VIGIA-IMID  ·  INFORME EJECUTIVO', M, 36);
 
     // Acento de color a la izquierda del título
     setFill(COLOR.accent);
@@ -7666,6 +7666,7 @@ function App() {
     if (filters.pathology) activeFilters.push(filters.pathology);
     if (filters.activeIngredient) activeFilters.push(filters.activeIngredient);
     if (paFilterMode === 'selection' && selectedPASet.size > 0) activeFilters.push(`${selectedPASet.size} PA`);
+    const lastY = yearData.data.length > 0 ? yearData.data[yearData.data.length - 1] : null;
     const prevY = yearData.data.length > 1 ? yearData.data[yearData.data.length - 2] : null;
     const calcDelta = (curr, prev) => prev > 0 ? (curr - prev) / prev * 100 : null;
     const deltaPacientes = lastY && prevY ? calcDelta(lastY.Pacientes, prevY.Pacientes) : null;
@@ -7690,7 +7691,7 @@ function App() {
     pdf.setFont('helvetica', 'bold');
     pdf.setFontSize(13);
     setText([255, 255, 255]);
-    pdf.text('DASHBOARD EJECUTIVO IMID', M + 24, 9);
+    pdf.text('VIGIA-IMID · DASHBOARD EJECUTIVO', M + 24, 9);
     pdf.setFont('helvetica', 'normal');
     pdf.setFontSize(7.5);
     setText(COLOR.amber);
@@ -8639,7 +8640,7 @@ function App() {
       setText(COLOR.muted);
       pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(7.5);
-      pdf.text(`SEGUIMIENTO ${GRAN.label.toUpperCase()} · IMID`, PAGE_W - M, 10, {
+      pdf.text(`VIGIA-IMID · SEGUIMIENTO ${GRAN.label.toUpperCase()}`, PAGE_W - M, 10, {
         align: 'right'
       });
       setText(COLOR.inkSoft);
@@ -8753,7 +8754,7 @@ function App() {
       pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(9);
       setText([200, 215, 222]);
-      pdf.text('INFORME DE SEGUIMIENTO · IMID', M, 32);
+      pdf.text('VIGIA-IMID · INFORME DE SEGUIMIENTO', M, 32);
       setFill(COLOR.accent);
       pdf.rect(M, 35, 14, 1.5, 'F');
       pdf.setFont('helvetica', 'bold');
@@ -10011,7 +10012,7 @@ function App() {
     pdf.setFont('helvetica', 'bold');
     pdf.setFontSize(13);
     setText([255, 255, 255]);
-    pdf.text(`SEGUIMIENTO ${GRAN.label.toUpperCase()} · IMID`, M + 24, 9);
+    pdf.text(`VIGIA-IMID · SEGUIMIENTO ${GRAN.label.toUpperCase()}`, M + 24, 9);
     pdf.setFont('helvetica', 'normal');
     pdf.setFontSize(7.5);
     setText(COLOR.amber);
@@ -10889,7 +10890,7 @@ function App() {
       setText(COLOR.muted);
       pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(7.5);
-      pdf.text(`SEGUIMIENTO DE BIOSIMILARES · ${GRAN.label.toUpperCase()}`, PAGE_W - M, 10, {
+      pdf.text(`VIGIA-IMID · BIOSIMILARES · ${GRAN.label.toUpperCase()}`, PAGE_W - M, 10, {
         align: 'right'
       });
       setText(COLOR.inkSoft);
@@ -11040,7 +11041,7 @@ function App() {
       pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(9);
       setText([200, 215, 222]);
-      pdf.text('INFORME DE SEGUIMIENTO DE BIOSIMILARES · IMID', M, 32);
+      pdf.text('VIGIA-IMID · INFORME DE BIOSIMILARES', M, 32);
       setFill(COLOR.mint);
       pdf.rect(M, 35, 14, 1.5, 'F');
       pdf.setFont('helvetica', 'bold');
