@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <meta name="theme-color" content="#1a5276">
-    <title>VIGIA-IMID - V39</title>
+    <title>VIGIA-IMID - V42</title>
     <style>
         /* ── Variables EMB ── */
         :root {
@@ -753,6 +753,1030 @@
 <body>
     <div id="root"></div>
 
+    <script>
+/*
+ * Motor de cálculo de persistencia (Kaplan-Meier) y adherencia (PDC y MPR) de VIGIA-IMID.
+ * Implementa ESPECIFICACION_METODOLOGIA_IMID.md.
+ *
+ * Funciona en el navegador (window.MotorIMID) y en Node (module.exports).
+ * Todas las fechas se manejan internamente como "día" = nº entero de días desde 1970-01-01 (UTC).
+ */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.MotorIMID = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const MS_DIA = 86400000;
+  const DIAS_MES = 30.4375;
+  const LAVADO_NAIVE_MIN = 4; // por debajo de estos meses la clasificación naive no es fiable
+
+  const COL = {
+    fecha: 'Fecha Dispensación',
+    id: 'Id',
+    patologia: 'Patología',
+    codProducto: 'Código Producto Dispensado',
+    producto: 'Descripción Producto Dispensado',
+    cantidad: 'Cantidad',
+    posologia: 'Posología (Según Prescripción)',
+    servicio: 'Servicio Prescriptor',
+    codGrupo: 'Código Grupo Terapéutico',
+    descGrupo: 'Descripción Grupo Terapéutico',
+    pa: 'Descripción Principio Activo',
+    coste: 'Coste Dispensación',
+    cpa: 'Código servicio CPA',
+    codDpto: 'Código dpto referencia',
+    descDpto: 'Descripción dpto referencia'
+  };
+
+  const DEFECTO = {
+    modo: 'pa',               // 'pa' (principio activo) | 'producto' (presentación comercial)
+    elementos: [],
+    desde: null,              // inicio del análisis; null = 1ª dispensación del fichero + lavado
+    finInclusion: null,       // fin de la ventana de inclusión (reclutamiento); null = hasta
+    hasta: null,              // fin de observación; null = última dispensación del fichero
+    lavadoMeses: 12,          // historia previa exigida para identificar nuevos usuarios y naive
+    tolerancia: 180,          // días sin cobertura tras agotarse el suministro para declarar abandono
+    ventanaNuevo: 120,        // días hacia atrás en los que un fármaco no debe haberse dispensado para ser "nuevo"
+    solape: 30,               // días de solape de transición admitidos en un cambio
+    cohorte: 'all',           // 'all' | 'naive' | 'noNaive'
+    umbralAdherencia: 80,     // % de PDC a partir del cual se considera adherente
+    pdcMinDias: 120,          // periodo mínimo evaluable
+    umbralMPR: 110,           // % de MPR que activa la alerta de acumulación
+    umbralSobrante: 30,       // días de medicación sobrante que activan la alerta
+    umbralAdelanto: 10,       // días de adelanto para contar una recogida como anticipada
+    minEnRiesgo: 10,          // nº mínimo en riesgo para considerar fiable la cola de la curva
+    excluirFaltantes: true,   // excluir de los cálculos los periodos sin datos
+    filtros: {}               // { servicio: [], dpto: [], patologia: [], id: [] }
+  };
+
+  const FALTANTES_DEFECTO = { diasMin: 3, umbralVolumen: 0.4 };
+
+  // ============================================================
+  // Fechas
+  // ============================================================
+  function aDia(v) {
+    if (v === null || v === undefined || v === '') return null;
+    if (v instanceof Date) {
+      if (isNaN(v)) return null;
+      // Redondeo al día más cercano en hora local (evita el desfase de algunas lecturas de Excel)
+      return Math.round((v.getTime() - v.getTimezoneOffset() * 60000) / MS_DIA);
+    }
+    if (typeof v === 'number') {
+      if (!isFinite(v)) return null;
+      return Math.floor(v) - 25569; // nº de serie Excel -> días desde 1970-01-01
+    }
+    const s = String(v).trim();
+    let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+    if (m) return Math.round(Date.UTC(+m[3], +m[2] - 1, +m[1]) / MS_DIA);
+    m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return Math.round(Date.UTC(+m[1], +m[2] - 1, +m[3]) / MS_DIA);
+    if (/^\d+(\.\d+)?$/.test(s)) return aDia(parseFloat(s));
+    return null;
+  }
+  function diaAISO(d) {
+    if (d === null || d === undefined) return null;
+    return new Date(d * MS_DIA).toISOString().slice(0, 10);
+  }
+  function diaATexto(d) {
+    const iso = diaAISO(d);
+    return iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '';
+  }
+  /** Date a medianoche local (para mostrar en la interfaz sin desfase de zona horaria). */
+  function diaADate(d) {
+    if (d === null || d === undefined) return null;
+    const u = new Date(d * MS_DIA);
+    return new Date(u.getUTCFullYear(), u.getUTCMonth(), u.getUTCDate());
+  }
+  function sumarMeses(dia, n) {
+    const f = new Date(dia * MS_DIA);
+    f.setUTCMonth(f.getUTCMonth() + n);
+    return Math.round(f.getTime() / MS_DIA);
+  }
+  const diaSemana = d => new Date(d * MS_DIA).getUTCDay(); // 0 domingo … 6 sábado
+
+  // ============================================================
+  // Números y texto
+  // ============================================================
+  function aNumero(v) {
+    if (v === null || v === undefined || v === '') return null;
+    if (typeof v === 'number') return isFinite(v) ? v : null;
+    let s = String(v).trim().replace(/\s|€/g, '');
+    if (/^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(s)) s = s.replace(/\./g, '').replace(',', '.');
+    else s = s.replace(',', '.');
+    const n = parseFloat(s);
+    return isFinite(n) ? n : null;
+  }
+  const txt = v => (v === null || v === undefined) ? '' : String(v).trim();
+
+  // ============================================================
+  // Posología
+  // ============================================================
+  const RX_FASE = /^\s*(?:(\d+(?:[.,]\d+)?)\s+y\s+MEDIO|(\d+(?:[.,]\d+)?)|MEDIO)\s+(.+?)\s+cada\s+(?:(\d+(?:[.,]\d+)?)\s+)?(d[ií]as?|d[ií]a\/s|horas?|semanas?|mes(?:es)?)(?![a-zñ])(.*)$/i;
+  const RX_DURANTE = /durante\s+(\d+(?:[.,]\d+)?)\s*(d[ií]as?|d[ií]a\/s|semanas?|mes(?:es)?)/i;
+  // Dosis expresadas en masa, volumen o envase (no en unidades de administración)
+  const RX_UNIDAD_MASA = /^(mg|ml|g|mcg|ui)\b/i;
+  const RX_ENVASE = /^envase/i;
+
+  function diasDeUnidad(u) {
+    u = u.toLowerCase();
+    if (u.startsWith('hora')) return 1 / 24;
+    if (u.startsWith('semana')) return 7;
+    if (u.startsWith('mes')) return 30;
+    return 1;
+  }
+
+  /**
+   * Devuelve { fases: [{ upd, duracion }], supuesta } (upd = unidades por día; duracion en días o null = indefinida)
+   * o null si no se puede interpretar.
+   *
+   * Dosis en MG/ML/G/UI o en ENVASE: se asume que cada unidad dispensada cubre un intervalo de dosis
+   * (suministro = cantidad × intervalo). Solo se aplica si el intervalo es ≥ 7 días o la fase tiene duración
+   * limitada; en pautas frecuentes y sin límite (p. ej. "7 ML cada 12 horas") no se puede inferir.
+   */
+  function parsePosologia(str) {
+    if (!str || typeof str !== 'string') return null;
+    const partes = str.trim().split(/\s+a\s+continuaci[oó]n\s+/i);
+    const fases = [];
+    let supuesta = false;
+    for (const p of partes) {
+      const m = p.match(RX_FASE);
+      if (!m) return null;
+      let n;
+      if (m[1] !== undefined) n = parseFloat(m[1].replace(',', '.')) + 0.5;
+      else if (m[2] !== undefined) n = parseFloat(m[2].replace(',', '.'));
+      else n = 0.5;
+      const unidadForma = m[3].trim();
+      const x = m[4] !== undefined ? parseFloat(m[4].replace(',', '.')) : 1;
+      const intervalo = x * diasDeUnidad(m[5]);
+      if (!(n > 0) || !(intervalo > 0)) return null;
+      let duracion = null;
+      const d = m[6].match(RX_DURANTE);
+      if (d) duracion = parseFloat(d[1].replace(',', '.')) * diasDeUnidad(d[2]);
+
+      let unidadesPorIntervalo = n;
+      if (RX_UNIDAD_MASA.test(unidadForma) || RX_ENVASE.test(unidadForma)) {
+        if (!(intervalo >= 7 || duracion !== null)) return null;
+        unidadesPorIntervalo = RX_ENVASE.test(unidadForma) ? n : 1; // MG/ML/G/UI: n es la dosis, no un nº de unidades
+        supuesta = true;
+      }
+      fases.push({ upd: unidadesPorIntervalo / intervalo, duracion });
+    }
+    return fases.length ? { fases, supuesta } : null;
+  }
+
+  /**
+   * Días de suministro de `cantidad` unidades, empezando a consumir en el día `transcurrido`
+   * (días desde la primera dispensación de ese producto al paciente). La última fase es indefinida.
+   */
+  function diasSuministro(pos, cantidad, transcurrido = 0) {
+    if (!pos || !(cantidad > 0)) return null;
+    const fases = pos.fases;
+    let ini = 0, i = 0;
+    while (i < fases.length - 1 && fases[i].duracion !== null && transcurrido >= ini + fases[i].duracion) {
+      ini += fases[i].duracion;
+      i++;
+    }
+    let t = transcurrido, restante = cantidad;
+    while (true) {
+      const f = fases[i];
+      const ultima = i === fases.length - 1 || f.duracion === null;
+      const fin = ultima ? Infinity : ini + f.duracion;
+      const capacidad = (fin - t) * f.upd;
+      if (restante <= capacidad) { t += restante / f.upd; break; }
+      restante -= capacidad;
+      t = fin; ini = fin; i++;
+    }
+    return Math.max(1, Math.round(t - transcurrido));
+  }
+
+  // ============================================================
+  // Periodos de datos faltantes
+  // ============================================================
+  /** Domingo de Pascua (calendario gregoriano, algoritmo de Meeus/Jones/Butcher) como día. */
+  function diaDePascua(anio) {
+    const a = anio % 19, b = Math.floor(anio / 100), c = anio % 100;
+    const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const mes = Math.floor((h + l - 7 * m + 114) / 31), dia = ((h + l - 7 * m + 114) % 31) + 1;
+    return Math.round(Date.UTC(anio, mes - 1, dia) / MS_DIA);
+  }
+  /**
+   * Festivos de referencia (España y Comunitat Valenciana) entre dos años: los días en que la farmacia no
+   * dispensa pueden confundirse con un hueco de datos. Jueves Santo, Viernes Santo y Lunes de Pascua
+   * (calculados), 1 y 6 ene, 19 mar, 1 may, 15 ago, 9 y 12 oct, 1 nov, 6, 8 y 25 dic.
+   */
+  function festivosPorDefecto(anioIni, anioFin) {
+    const set = new Set();
+    for (let y = anioIni; y <= anioFin; y++) {
+      const p = diaDePascua(y);
+      [p - 3, p - 2, p + 1].forEach(x => set.add(x));
+      [[1, 1], [1, 6], [3, 19], [5, 1], [8, 15], [10, 9], [10, 12], [11, 1], [12, 6], [12, 8], [12, 25]]
+        .forEach(([m, d]) => set.add(Math.round(Date.UTC(y, m - 1, d) / MS_DIA)));
+    }
+    return set;
+  }
+
+  /**
+   * Detecta periodos en los que no consta (o casi no consta) ninguna dispensación.
+   * Un día laborable (no sábado, domingo ni festivo) es "bajo" si su volumen es < umbralVolumen × la mediana
+   * de los días laborables de las 4 semanas anteriores y posteriores. Un periodo faltante son diasMin o más
+   * días laborables bajos consecutivos. Los festivos no cuentan como laborables, y los puentes (rachas de
+   * 1-2 días) no se marcan.
+   * opciones: { diasMin, umbralVolumen, festivos: Set|Array de días (por defecto, el calendario de referencia) }
+   * Devuelve [{ ini, fin, diasLaborables }] con ini/fin como día (calendario, ambos incluidos).
+   */
+  function detectarPeriodosFaltantes(disps, opciones = {}) {
+    const diasMin = opciones.diasMin || FALTANTES_DEFECTO.diasMin;
+    const umbral = opciones.umbralVolumen !== undefined ? opciones.umbralVolumen : FALTANTES_DEFECTO.umbralVolumen;
+    if (!disps || !disps.length) return [];
+    let min = Infinity, max = -Infinity;
+    const cnt = new Map();
+    disps.forEach(d => {
+      if (d.dia < min) min = d.dia;
+      if (d.dia > max) max = d.dia;
+      cnt.set(d.dia, (cnt.get(d.dia) || 0) + 1);
+    });
+    const anio = d => new Date(d * MS_DIA).getUTCFullYear();
+    const festivos = opciones.festivos ? new Set(opciones.festivos) : festivosPorDefecto(anio(min), anio(max));
+    const lab = [];
+    for (let d = min; d <= max; d++) { const w = diaSemana(d); if (w !== 0 && w !== 6 && !festivos.has(d)) lab.push(d); }
+    const vol = lab.map(d => cnt.get(d) || 0);
+    const mediana = arr => { const s = [...arr].sort((a, b) => a - b); const n = s.length; return n ? (n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2) : 0; };
+
+    const bajo = new Array(lab.length).fill(false);
+    let ini = 0, fin = 0; // ventana deslizante de días laborables dentro de ±28 días naturales
+    for (let i = 0; i < lab.length; i++) {
+      while (lab[ini] < lab[i] - 28) ini++;
+      while (fin < lab.length && lab[fin] <= lab[i] + 28) fin++;
+      const base = mediana(vol.slice(ini, fin));
+      // Con muy pocos datos por día no se puede distinguir un hueco del ruido
+      bajo[i] = base >= 10 && vol[i] < umbral * base;
+    }
+
+    const periodos = [];
+    let i = 0;
+    while (i < lab.length) {
+      if (!bajo[i]) { i++; continue; }
+      let j = i;
+      while (j + 1 < lab.length && bajo[j + 1]) j++;
+      const n = j - i + 1;
+      if (n >= diasMin) periodos.push({ ini: lab[i], fin: lab[j], diasLaborables: n });
+      i = j + 1;
+    }
+    return periodos;
+  }
+
+  /** Días de [a, b] (ambos incluidos) que caen dentro de algún periodo faltante. */
+  function diasEnFaltantes(a, b, periodos) {
+    if (!periodos || !periodos.length || b < a) return 0;
+    let n = 0;
+    for (const p of periodos) {
+      const i = Math.max(a, p.ini), f = Math.min(b, p.fin);
+      if (f >= i) n += f - i + 1;
+    }
+    return n;
+  }
+
+  // ============================================================
+  // Depuración
+  // ============================================================
+  function depurar(filas, cfg = {}) {
+    const inf = {
+      filasLeidas: filas.length, sinFechaOId: 0, duplicados: 0,
+      devoluciones: 0, devolucionesNoAplicadas: 0, unidadesDevueltasNoAplicadas: 0,
+      filasAnuladasPorDevolucion: 0, cantidadCero: 0, dptoCompletado: 0,
+      posologiaInterpretada: 0, posologiaSupuesta: 0, posologiaRespaldoPaciente: 0,
+      posologiaRespaldoProducto: 0, posologiaNoInterpretable: 0
+    };
+    const avisos = [];
+    const noInterpretables = new Map(); // texto -> nº de filas
+
+    // 1) Normalizar + duplicados exactos
+    const vistos = new Set();
+    const norm = [];
+    filas.forEach((r, i) => {
+      const clave = JSON.stringify(Object.keys(COL).map(k => r[COL[k]] instanceof Date ? r[COL[k]].getTime() : r[COL[k]]));
+      if (vistos.has(clave)) { inf.duplicados++; return; }
+      vistos.add(clave);
+      const dia = aDia(r[COL.fecha]);
+      const id = txt(r[COL.id]);
+      if (dia === null || !id) { inf.sinFechaOId++; return; }
+      const cantidad = aNumero(r[COL.cantidad]) || 0;
+      norm.push({
+        fila: i + 2, dia, id,
+        patologia: txt(r[COL.patologia]),
+        codProducto: txt(r[COL.codProducto]),
+        producto: txt(r[COL.producto]),
+        cantidad, cantidadOriginal: cantidad,
+        posologia: txt(r[COL.posologia]),
+        servicio: txt(r[COL.servicio]),
+        pa: txt(r[COL.pa]),
+        coste: aNumero(r[COL.coste]),
+        codDpto: txt(r[COL.codDpto]),
+        descDpto: txt(r[COL.descDpto])
+      });
+    });
+
+    // 2) Descripción de departamento ausente -> la más frecuente de su código
+    const dptoFrec = {};
+    norm.forEach(d => {
+      if (d.codDpto && d.descDpto) {
+        const m = (dptoFrec[d.codDpto] = dptoFrec[d.codDpto] || {});
+        m[d.descDpto] = (m[d.descDpto] || 0) + 1;
+      }
+    });
+    norm.forEach(d => {
+      if (!d.descDpto && d.codDpto && dptoFrec[d.codDpto]) {
+        d.descDpto = Object.entries(dptoFrec[d.codDpto]).sort((a, b) => b[1] - a[1])[0][0];
+        inf.dptoCompletado++;
+      }
+    });
+
+    // 3) Devoluciones: restar de la dispensación positiva más reciente (mismo paciente y producto)
+    const claveProd = d => d.codProducto || d.producto;
+    const porPacProd = {};
+    const devoluciones = new Map();
+    norm.forEach(d => { (porPacProd[d.id + '|' + claveProd(d)] = porPacProd[d.id + '|' + claveProd(d)] || []).push(d); });
+    Object.values(porPacProd).forEach(lista => {
+      lista.sort((a, b) => a.dia - b.dia || b.cantidad - a.cantidad);
+      lista.forEach((d, k) => {
+        if (d.cantidad >= 0) return;
+        inf.devoluciones++;
+        let destino = null;
+        for (let j = k - 1; j >= 0; j--) if (lista[j].cantidad > 0 && lista[j].dia <= d.dia) { destino = lista[j]; break; }
+        if (!destino) {
+          inf.devolucionesNoAplicadas++;
+          inf.unidadesDevueltasNoAplicadas += -d.cantidad;
+        } else {
+          const aplicar = Math.min(destino.cantidad, -d.cantidad);
+          destino.cantidad -= aplicar;
+          if (destino.coste !== null && d.coste !== null) destino.coste += d.coste;
+          if (aplicar < -d.cantidad) inf.unidadesDevueltasNoAplicadas += -d.cantidad - aplicar;
+          if (destino.cantidad === 0) inf.filasAnuladasPorDevolucion++;
+        }
+        if (!devoluciones.has(d.id)) devoluciones.set(d.id, []);
+        devoluciones.get(d.id).push({ dia: d.dia, producto: d.producto, pa: d.pa, cantidad: d.cantidadOriginal, coste: d.coste, aplicadaA: destino ? destino.dia : null });
+        d.cantidad = 0;
+        d._devolucion = true;
+      });
+    });
+    const positivas = norm.filter(d => {
+      if (d._devolucion) return false;
+      if (d.cantidad <= 0) { if (d.cantidadOriginal === 0) inf.cantidadCero++; return false; }
+      return true;
+    });
+    positivas.sort((a, b) => a.dia - b.dia);
+
+    // 4) Posología: interpretar; respaldo 1) posología interpretable más cercana del MISMO producto del
+    //    propio paciente; respaldo 2) la más frecuente del producto en el fichero; si no, se excluye.
+    positivas.forEach(d => { d._pos = parsePosologia(d.posologia); });
+
+    const frecPos = {};
+    positivas.forEach(d => {
+      if (d._pos) {
+        const m = (frecPos[claveProd(d)] = frecPos[claveProd(d)] || {});
+        m[d.posologia] = (m[d.posologia] || 0) + 1;
+      }
+    });
+    const respaldoProd = {};
+    Object.entries(frecPos).forEach(([cod, m]) => {
+      const t = Object.entries(m).sort((a, b) => b[1] - a[1])[0][0];
+      respaldoProd[cod] = { texto: t, pos: parsePosologia(t) };
+    });
+
+    const grupos = new Map();
+    positivas.forEach(d => {
+      const k = d.id + '|' + claveProd(d);
+      if (!grupos.has(k)) grupos.set(k, []);
+      grupos.get(k).push(d);
+    });
+    grupos.forEach(lista => {
+      lista.forEach((d, i) => {
+        if (d._pos) return;
+        let src = null;
+        for (let j = i - 1; j >= 0 && !src; j--) if (lista[j]._pos) src = lista[j];
+        for (let j = i + 1; j < lista.length && !src; j++) if (lista[j]._pos) src = lista[j];
+        if (src) d._respaldoPaciente = src;
+      });
+    });
+
+    // 5) Días de suministro (fase vigente según días desde la 1ª dispensación del producto)
+    const primeraProd = {};
+    positivas.forEach(d => {
+      const k = d.id + '|' + claveProd(d);
+      if (primeraProd[k] === undefined) primeraProd[k] = d.dia;
+    });
+    const disps = [];
+    positivas.forEach(d => {
+      let pos = d._pos;
+      d.posologiaUsada = d.posologia;
+      if (pos) {
+        d.origenSuministro = pos.supuesta ? 'supuesto' : 'interpretado';
+        if (pos.supuesta) inf.posologiaSupuesta++; else inf.posologiaInterpretada++;
+      } else if (d._respaldoPaciente) {
+        pos = d._respaldoPaciente._pos;
+        d.posologiaUsada = d._respaldoPaciente.posologia;
+        d.origenSuministro = 'respaldo-paciente';
+        inf.posologiaRespaldoPaciente++;
+      } else if (respaldoProd[claveProd(d)]) {
+        pos = respaldoProd[claveProd(d)].pos;
+        d.posologiaUsada = respaldoProd[claveProd(d)].texto;
+        d.origenSuministro = 'respaldo-producto';
+        inf.posologiaRespaldoProducto++;
+      } else {
+        inf.posologiaNoInterpretable++;
+        noInterpretables.set(d.posologia, (noInterpretables.get(d.posologia) || 0) + 1);
+        return;
+      }
+      d.suministro = diasSuministro(pos, d.cantidad, d.dia - primeraProd[d.id + '|' + claveProd(d)]);
+      disps.push(d);
+    });
+    // Limpieza al final: una dispensación posterior puede necesitar la posología interpretada de otra anterior
+    positivas.forEach(d => { delete d._pos; delete d._respaldoPaciente; });
+
+    // Índice por paciente
+    const porPaciente = new Map();
+    disps.forEach(d => {
+      if (!porPaciente.has(d.id)) porPaciente.set(d.id, []);
+      porPaciente.get(d.id).push(d);
+    });
+    porPaciente.forEach(l => l.sort((a, b) => a.dia - b.dia));
+
+    let fechaMin = null, fechaMax = null;
+    disps.forEach(d => {
+      if (fechaMin === null || d.dia < fechaMin) fechaMin = d.dia;
+      if (fechaMax === null || d.dia > fechaMax) fechaMax = d.dia;
+    });
+
+    const faltantes = detectarPeriodosFaltantes(disps, cfg.faltantes);
+
+    if (inf.posologiaSupuesta) avisos.push(`${inf.posologiaSupuesta} dispensaciones con la dosis expresada en MG/ML/envase: se ha supuesto que cada unidad dispensada cubre un intervalo de dosis.`);
+    const resp = inf.posologiaRespaldoPaciente + inf.posologiaRespaldoProducto;
+    if (resp) avisos.push(`${resp} dispensaciones con posología no interpretable: se ha usado la del propio paciente para ese producto (${inf.posologiaRespaldoPaciente}) o la más frecuente del producto (${inf.posologiaRespaldoProducto}).`);
+    if (inf.posologiaNoInterpretable) avisos.push(`${inf.posologiaNoInterpretable} dispensaciones excluidas: posología no interpretable y sin posología de respaldo.`);
+    if (inf.devolucionesNoAplicadas) avisos.push(`${inf.devolucionesNoAplicadas} devoluciones sin dispensación previa del mismo producto: descartadas.`);
+
+    inf.dispensacionesValidas = disps.length;
+    inf.pacientes = porPaciente.size;
+    inf.posologiasNoInterpretables = [...noInterpretables.entries()].map(([texto, n]) => ({ texto, n })).sort((a, b) => b.n - a.n);
+    devoluciones.forEach(l => l.sort((a, b) => a.dia - b.dia));
+    return { disps, porPaciente, devoluciones, fechaMin, fechaMax, faltantes, informe: inf, avisos };
+  }
+
+  // ============================================================
+  // Opciones para la interfaz
+  // ============================================================
+  function contarValores(disps, campo) {
+    const m = new Map();
+    disps.forEach(d => {
+      const v = d[campo];
+      if (!v) return;
+      if (!m.has(v)) m.set(v, new Set());
+      m.get(v).add(d.id);
+    });
+    return [...m.entries()].map(([valor, s]) => ({ valor, pacientes: s.size })).sort((a, b) => b.pacientes - a.pacientes || a.valor.localeCompare(b.valor));
+  }
+  function opciones(datos) {
+    const { disps } = datos;
+    return {
+      pa: contarValores(disps, 'pa'),
+      producto: contarValores(disps, 'producto'),
+      servicio: contarValores(disps, 'servicio'),
+      dpto: contarValores(disps, 'descDpto'),
+      patologia: contarValores(disps, 'patologia'),
+      fechaMin: datos.fechaMin,
+      fechaMax: datos.fechaMax
+    };
+  }
+
+  /**
+   * Medicamentos (PA o presentación comercial) que tienen al menos un paciente cuya PRIMERA dispensación
+   * del medicamento cumple los filtros (mismo criterio que el análisis). Devuelve [{valor, pacientes}].
+   */
+  function elementosConFiltros(datos, modo, filtros) {
+    const campo = modo === 'producto' ? 'producto' : 'pa';
+    const m = new Map();
+    datos.porPaciente.forEach((todas, id) => {
+      const vistos = new Set();
+      todas.forEach(d => {
+        const v = d[campo];
+        if (!v || vistos.has(v)) return;
+        vistos.add(v);                       // primera dispensación de ese medicamento para el paciente
+        if (!pasaFiltros(d, filtros)) return;
+        m.set(v, (m.get(v) || 0) + 1);
+      });
+    });
+    return [...m.entries()].map(([valor, pacientes]) => ({ valor, pacientes }))
+      .sort((a, b) => b.pacientes - a.pacientes || a.valor.localeCompare(b.valor));
+  }
+
+  // ============================================================
+  // Cobertura
+  // ============================================================
+  const claveDe =(d, modo) => modo === 'producto' ? d.producto : d.pa;
+
+  /** Intervalos de cobertura de una secuencia con desplazamiento de solapamientos. */
+  function intervalosSecuencia(disps) {
+    const out = [];
+    let cursor = -Infinity;
+    disps.forEach(d => {
+      const ini = Math.max(d.dia, cursor);
+      const fin = ini + d.suministro - 1;
+      out.push({ ini, fin, dia: d.dia, suministro: d.suministro });
+      cursor = fin + 1;
+    });
+    return out;
+  }
+  /** Une intervalos en bloques continuos disjuntos. */
+  function fusionar(intervalos) {
+    const s = [...intervalos].sort((a, b) => a.ini - b.ini);
+    const bloques = [];
+    s.forEach(iv => {
+      const u = bloques[bloques.length - 1];
+      if (u && iv.ini <= u.fin + 1) {
+        u.fin = Math.max(u.fin, iv.fin);
+        u.ultimaDisp = Math.max(u.ultimaDisp, iv.dia);
+      } else bloques.push({ ini: iv.ini, fin: iv.fin, ultimaDisp: iv.dia });
+    });
+    return bloques;
+  }
+  /** Días cubiertos dentro de [a, b] (los intervalos de una secuencia desplazada no se solapan). */
+  function diasCubiertosEn(intervalos, a, b) {
+    let n = 0;
+    intervalos.forEach(iv => {
+      const i = Math.max(a, iv.ini), f = Math.min(b, iv.fin);
+      if (f >= i) n += f - i + 1;
+    });
+    return n;
+  }
+
+  // ============================================================
+  // Persistencia de un paciente para un elemento
+  // ============================================================
+  /**
+   * eDisps: dispensaciones del elemento (hasta Hasta). dispsPac: todas las del paciente (hasta Hasta).
+   * Devuelve { tiempo, evento, motivo, fechaFin, destino, ajustadoPorFaltantes } y el episodio de persistencia.
+   */
+  function persistenciaPaciente(eDisps, dispsPac, el, P) {
+    const primer = eDisps[0].dia;
+    const bloques = fusionar(intervalosSecuencia(eDisps));
+    const falt = P._faltantesActivos;
+
+    const diasPorClave = {};
+    dispsPac.forEach(d => { const k = claveDe(d, P.modo); (diasPorClave[k] = diasPorClave[k] || []).push(d.dia); });
+    // Fármaco "nuevo": no dispensado en la ventana previa a su aparición
+    const esNuevo = (k, S) => !diasPorClave[k].some(x => x >= S - P.ventanaNuevo && x < S);
+
+    let ajustado = false;
+    for (let i = 0; i < bloques.length; i++) {
+      const b = bloques[i], sig = bloques[i + 1];
+      const ini = b.fin + 1, fin = sig ? sig.ini - 1 : P.hasta;
+      const bruto = fin - ini + 1;
+      const quitar = diasEnFaltantes(ini, fin, falt);
+      const hueco = Math.max(0, bruto - quitar);
+      if (quitar > 0 && bruto > P.tolerancia && hueco <= P.tolerancia) ajustado = true;
+      if (hueco <= P.tolerancia) continue; // sigue con el elemento
+
+      // El elemento se discontinúa. ¿Empieza un fármaco nuevo (cambio)?
+      const tope = sig ? sig.ini - 1 : P.hasta;
+      let S = null; const destinos = [];
+      for (const d of dispsPac) {
+        if (d.dia <= primer) continue;
+        if (d.dia < b.ultimaDisp - P.solape) continue;
+        if (d.dia > tope) break;
+        if (S !== null && d.dia > S) break;
+        const k = claveDe(d, P.modo);
+        if (k === el || !esNuevo(k, d.dia)) continue;
+        if (S === null) S = d.dia;
+        if (!destinos.includes(k)) destinos.push(k);
+      }
+      const destino = destinos.length ? destinos.sort().join(' + ') : null;
+      if (S !== null && S - 1 - b.fin <= P.tolerancia) {
+        const f = Math.min(b.fin, S - 1);
+        return { tiempo: f - primer, evento: 1, motivo: 'cambio', fechaFin: f, destino, destinoDia: S, ajustado };
+      }
+      return { tiempo: b.fin - primer, evento: 1, motivo: 'hueco', fechaFin: b.fin, destino, destinoDia: S, ajustado };
+    }
+    return { tiempo: P.hasta - primer, evento: 0, motivo: 'censura', fechaFin: P.hasta, destino: null, destinoDia: null, ajustado };
+  }
+
+  // ============================================================
+  // Adherencia de un paciente (dentro de su episodio de persistencia)
+  // ============================================================
+  function adherenciaPaciente(eDisps, per, P) {
+    const falt = P._faltantesActivos;
+    const ep = eDisps.filter(d => d.dia <= per.fechaFin);
+    const inicio = ep[0].dia;
+    const ultima = ep[ep.length - 1];
+    const ivs = intervalosSecuencia(ep);
+
+    let dias = ultima.dia - inicio;
+    let cubiertos = dias > 0 ? diasCubiertosEn(ivs, inicio, ultima.dia - 1) : 0;
+    let disponible = 0;
+    for (let i = 0; i < ep.length - 1; i++) disponible += ep[i].suministro;
+
+    // Intervalos entre dos dispensaciones consecutivas que contienen un periodo faltante: se excluyen
+    let excluidos = 0;
+    for (let i = 0; i < ep.length - 1; i++) {
+      const a = ep[i].dia, b = ep[i + 1].dia - 1;
+      if (b >= a && diasEnFaltantes(a, b, falt) > 0) {
+        dias -= (b - a + 1);
+        cubiertos -= diasCubiertosEn(ivs, a, b);
+        disponible -= ep[i].suministro;
+        excluidos++;
+      }
+    }
+    const sobrante = Math.max(0, disponible - cubiertos);
+    let nAdelantos = 0, maxAdelanto = 0;
+    ivs.forEach(iv => {
+      const adel = iv.ini - iv.dia;
+      if (adel >= P.umbralAdelanto) nAdelantos++;
+      if (adel > maxAdelanto) maxAdelanto = adel;
+    });
+    const pdc = dias > 0 ? cubiertos / dias * 100 : null;
+    const mpr = dias > 0 ? disponible / dias * 100 : null;
+    return {
+      inicio, ultimaDisp: ultima.dia, nDisp: ep.length, dias, cubiertos, pdc, mpr, disponible, sobrante,
+      nAdelantos, maxAdelanto, intervalosExcluidos: excluidos,
+      alertaAcumulacion: mpr !== null && (mpr > P.umbralMPR || sobrante >= P.umbralSobrante),
+      pdc6: pdcVentana(ep, ivs, per, P, Math.round(6 * DIAS_MES)),
+      pdc12: pdcVentana(ep, ivs, per, P, Math.round(12 * DIAS_MES))
+    };
+  }
+
+  /**
+   * PDC a ventana fija desde la 1ª dispensación: lo posterior a un abandono cuenta como no cubierto.
+   * Solo evaluable con la ventana completa observada o si ya hubo abandono. null en caso contrario.
+   */
+  function pdcVentana(ep, ivs, per, P, N) {
+    const inicio = ep[0].dia, fin = inicio + N - 1;
+    if (!per.evento && P.hasta < fin) return null;
+    const lim = Math.min(fin, per.fechaFin);
+    const falt = P._faltantesActivos;
+    let cub = 0;
+    ivs.forEach(iv => {
+      const a = Math.max(iv.ini, inicio), b = Math.min(iv.fin, lim);
+      if (b >= a) cub += (b - a + 1) - diasEnFaltantes(a, b, falt);
+    });
+    const den = N - diasEnFaltantes(inicio, fin, falt);
+    return den > 0 ? cub / den * 100 : null;
+  }
+
+  // ============================================================
+  // Kaplan-Meier (Greenwood, IC 95 % log-log)
+  // ============================================================
+  function kaplanMeier(sujetos, z = 1.96) {
+    const valid = sujetos.filter(s => s.time >= 0);
+    const n = valid.length;
+    if (n === 0) return { n: 0, steps: [{ t: 0, surv: 1, atRisk: 0, events: 0, ciL: 1, ciU: 1 }], subjects: [], median: null, medianReached: false };
+    const eventTimes = [...new Set(valid.filter(s => s.event === 1).map(s => s.time))].sort((a, b) => a - b);
+    let surv = 1, sumTerm = 0;
+    const steps = [{ t: 0, surv: 1, atRisk: n, events: 0, ciL: 1, ciU: 1 }];
+    eventTimes.forEach(t => {
+      const atRisk = valid.filter(s => s.time >= t).length;
+      const d = valid.filter(s => s.event === 1 && s.time === t).length;
+      if (atRisk > 0) {
+        surv *= 1 - d / atRisk;
+        if (atRisk - d > 0) sumTerm += d / (atRisk * (atRisk - d)); else sumTerm = Infinity;
+      }
+      let ciL = surv, ciU = surv;
+      if (surv > 0 && surv < 1 && isFinite(sumTerm) && sumTerm > 0) {
+        const lnS = Math.log(surv);
+        const se = Math.sqrt(sumTerm) / Math.abs(lnS);
+        const c = Math.log(-lnS);
+        ciU = Math.exp(-Math.exp(c - z * se));
+        ciL = Math.exp(-Math.exp(c + z * se));
+      } else if (surv <= 0) { ciL = 0; ciU = 0; }
+      steps.push({ t, surv, atRisk, events: d, ciL, ciU });
+    });
+    let median = null;
+    for (const p of steps) if (p.surv <= 0.5) { median = p.t; break; }
+    return { n, steps, subjects: valid, median, medianReached: median !== null };
+  }
+  function estadoEn(steps, t) {
+    let r = steps[0];
+    for (const p of steps) { if (p.t <= t) r = p; else break; }
+    return r;
+  }
+  const survEn = (steps, t) => estadoEn(steps, t).surv;
+  const enRiesgoEn = (sujetos, t) => sujetos.filter(s => s.time >= t).length;
+
+  // ============================================================
+  // Log-rank (k grupos) y chi-cuadrado
+  // ============================================================
+  function logRank(grupos) {
+    const k = grupos.length;
+    if (k < 2) return null;
+    const todos = [];
+    grupos.forEach((g, gi) => g.forEach(s => todos.push({ ...s, g: gi })));
+    const tiempos = [...new Set(todos.filter(s => s.event === 1).map(s => s.time))].sort((a, b) => a - b);
+    const O = new Array(k).fill(0), E = new Array(k).fill(0);
+    const V = Array.from({ length: k }, () => new Array(k).fill(0));
+    tiempos.forEach(t => {
+      const nj = grupos.map(g => g.filter(s => s.time >= t).length);
+      const dj = grupos.map(g => g.filter(s => s.event === 1 && s.time === t).length);
+      const N = nj.reduce((a, b) => a + b, 0), D = dj.reduce((a, b) => a + b, 0);
+      if (N === 0) return;
+      for (let i = 0; i < k; i++) {
+        O[i] += dj[i];
+        E[i] += D * nj[i] / N;
+        if (N > 1) for (let j = 0; j < k; j++) {
+          V[i][j] += (i === j)
+            ? D * (nj[i] / N) * (1 - nj[i] / N) * (N - D) / (N - 1)
+            : -D * (nj[i] / N) * (nj[j] / N) * (N - D) / (N - 1);
+        }
+      }
+    });
+    const m = k - 1;
+    const U = O.slice(0, m).map((o, i) => o - E[i]);
+    const Vr = V.slice(0, m).map(f => f.slice(0, m));
+    const inv = invertir(Vr);
+    if (!inv) return { chi2: null, gl: m, p: null, O, E };
+    let chi2 = 0;
+    for (let i = 0; i < m; i++) for (let j = 0; j < m; j++) chi2 += U[i] * inv[i][j] * U[j];
+    return { chi2, gl: m, p: 1 - chi2CDF(chi2, m), O, E };
+  }
+  function invertir(A) {
+    const n = A.length;
+    const M = A.map((f, i) => [...f, ...Array.from({ length: n }, (_, j) => (i === j ? 1 : 0))]);
+    for (let c = 0; c < n; c++) {
+      let piv = c;
+      for (let r = c + 1; r < n; r++) if (Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+      if (Math.abs(M[piv][c]) < 1e-12) return null;
+      [M[c], M[piv]] = [M[piv], M[c]];
+      const div = M[c][c];
+      for (let j = 0; j < 2 * n; j++) M[c][j] /= div;
+      for (let r = 0; r < n; r++) if (r !== c) {
+        const f = M[r][c];
+        for (let j = 0; j < 2 * n; j++) M[r][j] -= f * M[c][j];
+      }
+    }
+    return M.map(f => f.slice(n));
+  }
+  function lnGamma(x) {
+    const c = [76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
+    let y = x, tmp = x + 5.5;
+    tmp -= (x + 0.5) * Math.log(tmp);
+    let ser = 1.000000000190015;
+    for (let j = 0; j < 6; j++) ser += c[j] / ++y;
+    return -tmp + Math.log(2.5066282746310005 * ser / x);
+  }
+  function gammaP(a, x) {
+    if (x <= 0) return 0;
+    if (x < a + 1) {
+      let ap = a, sum = 1 / a, del = sum;
+      for (let n = 0; n < 500; n++) { ap++; del *= x / ap; sum += del; if (Math.abs(del) < Math.abs(sum) * 1e-14) break; }
+      return sum * Math.exp(-x + a * Math.log(x) - lnGamma(a));
+    }
+    let b = x + 1 - a, c = 1 / 1e-300, d = 1 / b, h = d;
+    for (let i = 1; i < 500; i++) {
+      const an = -i * (i - a);
+      b += 2;
+      d = an * d + b; if (Math.abs(d) < 1e-300) d = 1e-300;
+      c = b + an / c; if (Math.abs(c) < 1e-300) c = 1e-300;
+      d = 1 / d;
+      const del = d * c;
+      h *= del;
+      if (Math.abs(del - 1) < 1e-14) break;
+    }
+    return 1 - Math.exp(-x + a * Math.log(x) - lnGamma(a)) * h;
+  }
+  function chi2CDF(x, gl) { return gammaP(gl / 2, x / 2); }
+
+  // ============================================================
+  // Estadística descriptiva
+  // ============================================================
+  function cuantil(ordenados, q) {
+    if (!ordenados.length) return null;
+    const pos = (ordenados.length - 1) * q, b = Math.floor(pos), r = pos - b;
+    return ordenados[b + 1] !== undefined ? ordenados[b] + r * (ordenados[b + 1] - ordenados[b]) : ordenados[b];
+  }
+  function resumenNumerico(valores) {
+    const v = valores.filter(x => x !== null && x !== undefined).sort((a, b) => a - b);
+    const n = v.length;
+    if (!n) return { n: 0, media: null, mediana: null, p25: null, p75: null };
+    return { n, media: v.reduce((a, b) => a + b, 0) / n, mediana: cuantil(v, 0.5), p25: cuantil(v, 0.25), p75: cuantil(v, 0.75) };
+  }
+  function resumenPDC(lista, umbral) {
+    const pdc = resumenNumerico(lista.map(p => p.pdc));
+    if (!pdc.n) return { ...pdc, adherentes: 0, pctAdherentes: null, mprMediana: null, alertas: 0, pctAlertas: null };
+    const adherentes = lista.filter(p => p.pdc !== null && p.pdc >= umbral).length;
+    const alertas = lista.filter(p => p.alertaAcumulacion).length;
+    return {
+      ...pdc, adherentes, pctAdherentes: adherentes / pdc.n * 100,
+      mprMediana: resumenNumerico(lista.map(p => p.mpr)).mediana,
+      alertas, pctAlertas: alertas / pdc.n * 100
+    };
+  }
+  function resumenVentana(lista, campo, umbral) {
+    const r = resumenNumerico(lista.map(p => p[campo]));
+    const ok = lista.filter(p => p[campo] !== null && p[campo] !== undefined && p[campo] >= umbral).length;
+    return { ...r, adherentes: ok, pctAdherentes: r.n ? ok / r.n * 100 : null };
+  }
+  const TRAMOS_PDC = [
+    { etiqueta: '<50 %', min: 0, max: 50 },
+    { etiqueta: '50–59 %', min: 50, max: 60 },
+    { etiqueta: '60–69 %', min: 60, max: 70 },
+    { etiqueta: '70–79 %', min: 70, max: 80 },
+    { etiqueta: '80–89 %', min: 80, max: 90 },
+    { etiqueta: '90–100 %', min: 90, max: Infinity }
+  ];
+  const distribucionPDC = lista => TRAMOS_PDC.map(t => ({ tramo: t.etiqueta, n: lista.filter(p => p.pdc >= t.min && p.pdc < t.max).length }));
+
+  // ============================================================
+  // Validación de parámetros
+  // ============================================================
+  function normalizarParametros(datos, p) {
+    const P = { ...DEFECTO, ...p, filtros: { ...(p.filtros || {}) } };
+    P.desde = typeof P.desde === 'number' ? P.desde : aDia(P.desde);
+    P.hasta = typeof P.hasta === 'number' ? P.hasta : aDia(P.hasta);
+    P.finInclusion = typeof P.finInclusion === 'number' ? P.finInclusion : aDia(P.finInclusion);
+    if (P.desde === null && datos.fechaMin !== null) P.desde = sumarMeses(datos.fechaMin, P.lavadoMeses);
+    if (P.hasta === null) P.hasta = datos.fechaMax;
+    if (P.finInclusion === null) P.finInclusion = P.hasta;
+    const lista = p.periodosFaltantes || datos.faltantes || [];
+    P._periodosFaltantes = lista;
+    P._faltantesActivos = P.excluirFaltantes ? lista : [];
+    return P;
+  }
+  function validar(datos, p) {
+    const P = normalizarParametros(datos, p);
+    const errores = [], avisos = [];
+    if (!datos.disps.length) errores.push('No hay dispensaciones válidas en el fichero.');
+    if (!(P.lavadoMeses >= 0) || !Number.isInteger(P.lavadoMeses)) errores.push('El periodo de lavado debe ser un número entero de meses (0 o más).');
+    else if (P.cohorte === 'naive' && P.lavadoMeses < LAVADO_NAIVE_MIN) errores.push(`Para analizar pacientes naive el periodo de lavado debe ser de al menos ${LAVADO_NAIVE_MIN} meses (con menos historia no se puede asegurar que el paciente no haya recibido otro tratamiento antes).`);
+    else if (P.lavadoMeses < LAVADO_NAIVE_MIN) avisos.push(`Periodo de lavado de ${P.lavadoMeses} meses (< ${LAVADO_NAIVE_MIN}): la clasificación de pacientes naive no es fiable.`);
+    if (!(P.tolerancia >= 0)) errores.push('La tolerancia no es válida.');
+    if (!(P.ventanaNuevo >= 0) || !(P.solape >= 0)) errores.push('La ventana de fármaco nuevo y el solape de transición deben ser 0 o más días.');
+    if (!(P.umbralAdherencia > 0 && P.umbralAdherencia <= 100)) errores.push('El umbral de adherencia debe estar entre 1 y 100 %.');
+    if (!P.elementos || !P.elementos.length) errores.push('Selecciona al menos un medicamento.');
+    if (P.desde === null || P.hasta === null) errores.push('Fechas de inicio / fin no válidas.');
+    else {
+      const minimo = sumarMeses(datos.fechaMin, P.lavadoMeses);
+      if (P.desde < minimo) errores.push(`El inicio del análisis debe ser igual o posterior al ${diaATexto(minimo)} (primera dispensación del fichero + ${P.lavadoMeses} meses de lavado).`);
+      if (P.finInclusion < P.desde) errores.push('El fin de la inclusión no puede ser anterior al inicio del análisis.');
+      if (P.hasta < P.finInclusion) errores.push('El fin de la observación no puede ser anterior al fin de la inclusión.');
+      if (P.hasta > datos.fechaMax) errores.push(`El fin de la observación no puede ser posterior a la última dispensación del fichero (${diaATexto(datos.fechaMax)}).`);
+    }
+    return { P, errores, avisos };
+  }
+
+  // ============================================================
+  // Análisis principal
+  // ============================================================
+  function pasaFiltros(ref, filtros) {
+    if (!filtros) return true;
+    const chk = (lista, v) => !lista || !lista.length || lista.includes(v);
+    return chk(filtros.servicio, ref.servicio) && chk(filtros.dpto, ref.descDpto) && chk(filtros.patologia, ref.patologia) && chk(filtros.id, ref.id);
+  }
+
+  function calcularElemento(datos, el, P) {
+    const sujetos = [];      // nuevos usuarios del elemento (todas las cohortes)
+    const adh = new Map();   // id -> resultado de adherencia
+    datos.porPaciente.forEach((todas, id) => {
+      const eAll = todas.filter(d => claveDe(d, P.modo) === el);
+      if (!eAll.length) return;
+      const primer = eAll[0].dia;
+      // Nuevo usuario: el elemento empieza dentro de la ventana de inclusión (y no se dispensó antes de Desde)
+      if (primer < P.desde || primer > P.finInclusion || primer > P.hasta) return;
+      const ref = eAll[0];
+      if (!pasaFiltros(ref, P.filtros)) return;
+
+      const dispsPac = todas.filter(d => d.dia <= P.hasta);
+      const eDisps = eAll.filter(d => d.dia <= P.hasta);
+      const previos = dispsPac.filter(d => d.dia < primer);
+      const naive = previos.length === 0;
+
+      // Tratamientos previos (solo no naive)
+      const prevSet = new Map();
+      previos.forEach(d => { const k = claveDe(d, P.modo); if (!prevSet.has(k)) prevSet.set(k, d.pa); });
+      const prevTreatments = [...prevSet.entries()].map(([nombre, pa]) => ({ nombre, mismoPA: P.modo === 'producto' && pa === ref.pa }));
+      let prev = null;
+      for (let i = previos.length - 1; i >= 0; i--) { if (claveDe(previos[i], P.modo) !== el) { prev = previos[i]; break; } }
+
+      const per = persistenciaPaciente(eDisps, dispsPac, el, P);
+      const ep = eDisps.filter(d => d.dia <= per.fechaFin);
+      const ad = adherenciaPaciente(eDisps, per, P);
+      sujetos.push({
+        id, naive, cohorte: naive ? 'naive' : 'noNaive',
+        time: per.tiempo, event: per.evento, motivo: per.motivo,
+        outcome: per.motivo === 'cambio' ? 'switch' : per.motivo === 'hueco' ? 'gap' : 'censored',
+        destino: per.destino,
+        prevTreatments, prevTreatment: prev ? claveDe(prev, P.modo) : null,
+        prevTreatmentDate: prev ? diaADate(prev.dia) : null,
+        nextTreatment: per.destino, nextTreatmentDate: per.destinoDia !== null ? diaADate(per.destinoDia) : null,
+        firstDate: diaADate(primer), lastDate: diaADate(ep[ep.length - 1].dia),
+        inicio: primer, fechaFin: per.fechaFin,
+        pathology: ref.patologia || null, servicio: ref.servicio, dpto: ref.descDpto,
+        ajustadoPorFaltantes: per.ajustado || ad.intervalosExcluidos > 0
+      });
+      adh.set(id, ad);
+    });
+
+    // Cohorte seleccionada
+    const enCohorte = s => P.cohorte === 'all' || P.cohorte === s.cohorte;
+    const cohort = sujetos.filter(enCohorte);
+    const naiveN = cohort.filter(s => s.naive).length;
+
+    const prevCount = {};
+    cohort.forEach(s => {
+      if (s.naive) return;
+      if (!s.prevTreatments.length) { prevCount['(previo no identificado)'] = prevCount['(previo no identificado)'] || { n: 0, mismoPA: false }; prevCount['(previo no identificado)'].n++; }
+      s.prevTreatments.forEach(t => { const x = (prevCount[t.nombre] = prevCount[t.nombre] || { n: 0, mismoPA: t.mismoPA }); x.n++; });
+    });
+
+    const km = kaplanMeier(cohort);
+    const hitos = [6, 12, 24].map(m => {
+      const t = Math.round(m * DIAS_MES), e = estadoEn(km.steps, t), enR = enRiesgoEn(cohort, t);
+      return { meses: m, t, surv: e.surv, ciL: e.ciL, ciU: e.ciU, enRiesgo: enR, fiable: enR >= P.minEnRiesgo };
+    });
+    const motivos = { hueco: 0, cambio: 0, censura: 0 };
+    cohort.forEach(s => { motivos[s.motivo]++; });
+    const destinos = {};
+    cohort.filter(s => s.motivo === 'cambio').forEach(s => { destinos[s.destino] = (destinos[s.destino] || 0) + 1; });
+
+    // Adherencia (misma población que la persistencia)
+    const evaluables = [], excluidos = [];
+    cohort.forEach(s => {
+      const a = adh.get(s.id);
+      const reg = { id: s.id, cohorte: s.cohorte, ...a, adherente: a.pdc !== null && a.pdc >= P.umbralAdherencia, motivo: s.motivo };
+      if (a.dias < P.pdcMinDias) excluidos.push(reg); else evaluables.push(reg);
+    });
+    const porCohorte = {};
+    ['naive', 'noNaive'].forEach(c => { porCohorte[c] = resumenPDC(evaluables.filter(p => p.cohorte === c), P.umbralAdherencia); });
+    const total = evaluables.length + excluidos.length;
+
+    return {
+      elemento: el, med: el,
+      totalAll: cohort.length, naiveN, noNaiveN: cohort.length - naiveN, cohortN: cohort.length,
+      prevTreatments: Object.entries(prevCount).map(([name, x]) => ({ name, n: x.n, mismoPA: x.mismoPA })).sort((a, b) => b.n - a.n),
+      km, hitos, motivos,
+      destinos: Object.entries(destinos).map(([destino, n]) => ({ destino, n })).sort((a, b) => b.n - a.n),
+      subjects: cohort,
+      ajustadosPorFaltantes: cohort.filter(s => s.ajustadoPorFaltantes).length,
+      adherencia: {
+        pacientes: evaluables, excluidos,
+        pctExcluidos: total ? excluidos.length / total * 100 : null,
+        resumen: resumenPDC(evaluables, P.umbralAdherencia),
+        porCohorte,
+        distribucion: distribucionPDC(evaluables),
+        ventana6: resumenVentana(cohort.map(s => adh.get(s.id)), 'pdc6', P.umbralAdherencia),
+        ventana12: resumenVentana(cohort.map(s => adh.get(s.id)), 'pdc12', P.umbralAdherencia),
+        intervalosExcluidos: evaluables.reduce((a, p) => a + p.intervalosExcluidos, 0)
+      }
+    };
+  }
+
+  function analizar(datos, parametros) {
+    const { P, errores, avisos } = validar(datos, parametros);
+    if (errores.length) return { errores, parametros: P };
+    const resultados = P.elementos.map(el => calcularElemento(datos, el, P));
+
+    let comparacion = null;
+    if (resultados.length > 1) {
+      const grupos = resultados.map(r => r.subjects).filter(g => g.length);
+      const ids = new Map();
+      let solapados = 0;
+      resultados.forEach((r, gi) => r.subjects.forEach(s => {
+        if (ids.has(s.id) && ids.get(s.id) !== gi) solapados++;
+        else ids.set(s.id, gi);
+      }));
+      comparacion = { logRank: grupos.length > 1 ? logRank(grupos) : null, pacientesEnVariosGrupos: solapados };
+      if (solapados) avisos.push(`${solapados} pacientes aparecen en más de una curva: el test log-rank no es formalmente válido (grupos no independientes).`);
+    }
+    return { parametros: P, resultados, comparacion, avisos, errores: [], faltantes: P._periodosFaltantes };
+  }
+
+  /** Persistencia a 12 meses para distintas tolerancias (análisis de sensibilidad). Siempre incluye la tolerancia en uso. */
+  function sensibilidadTolerancia(datos, parametros, tolerancias = [90, 120, 180, 240]) {
+    const actual = Number(parametros && parametros.tolerancia);
+    const lista = Number.isFinite(actual) && !tolerancias.includes(actual) ? [...tolerancias, actual].sort((a, b) => a - b) : tolerancias;
+    return lista.map(t => {
+      const r = analizar(datos, { ...parametros, tolerancia: t });
+      if (r.errores && r.errores.length) return { tolerancia: t, error: r.errores[0] };
+      return {
+        tolerancia: t,
+        elementos: r.resultados.map(x => {
+          const h = x.hitos.find(z => z.meses === 12);
+          return { elemento: x.elemento, n: x.cohortN, surv12: h.surv, ciL: h.ciL, ciU: h.ciU, fiable: h.fiable, eventos: x.motivos.hueco + x.motivos.cambio };
+        })
+      };
+    });
+  }
+
+  return {
+    COL, DEFECTO, FALTANTES_DEFECTO, DIAS_MES, LAVADO_NAIVE_MIN,
+    aDia, diaAISO, diaATexto, diaADate, sumarMeses, aNumero,
+    parsePosologia, diasSuministro,
+    depurar, detectarPeriodosFaltantes, diaDePascua, festivosPorDefecto, opciones, elementosConFiltros, validar, analizar, sensibilidadTolerancia,
+    kaplanMeier, estadoEn, survEn, enRiesgoEn, logRank, chi2CDF,
+    _int: { persistenciaPaciente, adherenciaPaciente, intervalosSecuencia, fusionar, diasCubiertosEn, diasEnFaltantes, cuantil }
+  };
+});
+
+    </script>
         <!-- React 18.2.0 — MIT -->
     <script>
 /**
@@ -1621,6 +2645,62 @@ const InfoTip = ({
   }, text));
 };
 
+// Campo numérico configurable con su icono de información (definición al pasar el ratón)
+const ParamField = ({
+  label,
+  tip,
+  value,
+  onChange,
+  min,
+  max,
+  step,
+  suffix
+}) => /*#__PURE__*/React.createElement("div", {
+  style: {
+    flex: '1 1 200px',
+    minWidth: '180px'
+  }
+}, /*#__PURE__*/React.createElement("label", {
+  style: {
+    display: 'flex',
+    alignItems: 'center',
+    fontSize: '0.82em',
+    color: '#475569',
+    marginBottom: '4px',
+    fontWeight: 600
+  }
+}, label, /*#__PURE__*/React.createElement(InfoTip, {
+  text: tip
+})), /*#__PURE__*/React.createElement("div", {
+  style: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px'
+  }
+}, /*#__PURE__*/React.createElement("input", {
+  type: "number",
+  value: value,
+  min: min,
+  max: max,
+  step: step || 1,
+  onChange: e => onChange(e.target.value),
+  style: {
+    width: '100%',
+    padding: '8px 10px',
+    border: '1px solid #cbd5e1',
+    borderRadius: '8px',
+    fontSize: '0.95em'
+  }
+}), suffix && /*#__PURE__*/React.createElement("span", {
+  style: {
+    fontSize: '0.8em',
+    color: '#64748b',
+    whiteSpace: 'nowrap'
+  }
+}, suffix)));
+// Formato numérico con una decimal y coma
+const fmt1 = v => v === null || v === undefined || isNaN(v) ? '–' : v.toFixed(1).replace('.', ',');
+
 // Detecta qué biosimilar contiene una descripción de producto
 const getBiosimilarKey = descripcion => {
   const upper = descripcion.toUpperCase();
@@ -1675,6 +2755,37 @@ function App() {
   const [persistResults, setPersistResults] = useState(null);
   const [persistError, setPersistError] = useState('');
   const [persistDetailMed, setPersistDetailMed] = useState(null); // medicamento cuyo detalle de pacientes se muestra en el modal
+  // Parámetros de la persistencia y la adherencia (valores por defecto: ESPECIFICACION_METODOLOGIA_IMID.md §10)
+  const [persistParams, setPersistParams] = useState({
+    lavadoMeses: 12,
+    // historia previa exigida para identificar naive y nuevos usuarios
+    tolerancia: 180,
+    // días sin cobertura tras agotarse el suministro para declarar abandono
+    ventanaNuevo: 120,
+    // días previos en que un fármaco no debe haberse dispensado para ser "nuevo"
+    solape: 30,
+    // solape de transición admitido en un cambio
+    umbralAdherencia: 80,
+    // % de PDC para considerar adherente
+    pdcMinDias: 120,
+    // periodo mínimo evaluable
+    umbralMPR: 110,
+    // % de MPR que activa la alerta de acumulación
+    umbralSobrante: 30,
+    // días de sobrante que activan la alerta
+    umbralAdelanto: 10,
+    // días de adelanto para contar una recogida anticipada
+    minEnRiesgo: 10,
+    // pacientes en riesgo mínimos para considerar fiable la cola de la curva
+    excluirFaltantes: true,
+    // excluir de los cálculos los periodos sin datos
+    faltDiasMin: 3,
+    // días laborables consecutivos sin dispensaciones para marcar un periodo faltante
+    faltUmbral: 40 // % del volumen habitual por debajo del cual un día laborable se considera "bajo"
+  });
+  const [showPersistAdvanced, setShowPersistAdvanced] = useState(false);
+  const [engineInfo, setEngineInfo] = useState(null); // informe de depuración y periodos faltantes del fichero cargado
+  const engineRef = useRef(null); // datos depurados por el motor (pesados: fuera del estado)
   const [sankeySrcSet, setSankeySrcSet] = useState(null); // Sankey: fármacos de ORIGEN (A) a incluir. null = todos
   const [sankeySrcSearch, setSankeySrcSearch] = useState(''); // buscador del menú de fármacos de origen del Sankey
   const [pathStartDate, setPathStartDate] = useState(''); // Esquemas: fecha de inicio (criterio naïve, con lookback)
@@ -1993,6 +3104,33 @@ function App() {
           dateFrom: '',
           dateTo: ''
         });
+
+        // Depuración con el motor de persistencia y adherencia: duplicados, devoluciones,
+        // días de suministro y detección de periodos sin datos.
+        try {
+          const motorDatos = MotorIMID.depurar(jsonData);
+          engineRef.current = motorDatos;
+          setEngineInfo({
+            informe: motorDatos.informe,
+            avisos: motorDatos.avisos,
+            faltantes: motorDatos.faltantes,
+            fechaMin: motorDatos.fechaMin,
+            fechaMax: motorDatos.fechaMax
+          });
+        } catch (errMotor) {
+          console.error('Error al depurar los datos con el motor:', errMotor);
+          engineRef.current = null;
+          setEngineInfo({
+            error: errMotor.message
+          });
+        }
+        // Una selección o un resultado de un fichero anterior ya no son válidos
+        setPersistSelected(new Set());
+        setPersistResults(null);
+        setPersistError('');
+        setPersistStartDate('');
+        setPersistInclusionEnd('');
+        setPersistObsEnd('');
         setData(jsonData);
         setLoading(false);
       } catch (error) {
@@ -2021,60 +3159,13 @@ function App() {
   };
 
   // === ANÁLISIS POR PACIENTE ===
-  const parsePosologia = posStr => {
-    // Devuelve { unidadesPorToma, intervaloDias } o null si no se puede parsear
-    if (!posStr || typeof posStr !== 'string') return null;
-    const str = posStr.trim();
-
-    // Patrón principal: "N FORMA cada X días/horas ..."
-    // También: "N Envase cada X día/s ..."
-    // Tomamos solo la ÚLTIMA fase para mantenimiento en pautas complejas con "a continuación"
-    const fases = str.split(/\s+a continuación\s+/i);
-    const faseActiva = fases[fases.length - 1].trim();
-
-    // Regex: captura cantidad, intervalo y unidad (días/horas/día)
-    const match = faseActiva.match(/^(\d+(?:\.\d+)?)\s+.+?\s+cada\s+(\d+(?:\.\d+)?)\s+(días?|día\/s|horas?)\b/i);
-    if (!match) {
-      // Intentar patrón "cada día" (sin número de intervalo = cada 1 día)
-      const matchDia = faseActiva.match(/^(\d+(?:\.\d+)?)\s+.+?\s+cada\s+día\b/i);
-      if (matchDia) {
-        return {
-          unidadesPorToma: parseFloat(matchDia[1]),
-          intervaloDias: 1
-        };
-      }
-      // Patrón "cada X horas" para comprimidos (ej: cada 12 horas = 0.5 días)
-      const matchHoras = faseActiva.match(/^(\d+(?:\.\d+)?)\s+.+?\s+cada\s+(\d+(?:\.\d+)?)\s+horas?\b/i);
-      if (matchHoras) {
-        const horas = parseFloat(matchHoras[2]);
-        if (!horas) return null;
-        // "cada X horas" = X/24 días (ej: cada 12 h = 0,5 días; cada 48 h = 2 días)
-        return {
-          unidadesPorToma: parseFloat(matchHoras[1]),
-          intervaloDias: horas / 24
-        };
-      }
-      return null;
-    }
-    const unidadesPorToma = parseFloat(match[1]);
-    let intervalo = parseFloat(match[2]);
-    const unidad = match[3].toLowerCase();
-
-    // "cada X horas" = X/24 días (interpretación farmacológica directa)
-    if (unidad.startsWith('hora')) {
-      intervalo = intervalo / 24;
-    }
-    return {
-      unidadesPorToma,
-      intervaloDias: intervalo
-    };
-  };
+  // Días cubiertos por una dispensación según su cantidad y posología.
+  // Usa el intérprete del motor (días, semanas, meses, fases, MEDIO, coma decimal, MG/ML/envase).
+  // Devuelve null si la posología no se puede interpretar.
   const calcularDiasCubiertos = (cantidad, posologia) => {
-    const parsed = parsePosologia(posologia);
-    if (!parsed || !parsed.unidadesPorToma || !parsed.intervaloDias) return null;
-    if (isNaN(parsed.unidadesPorToma) || isNaN(parsed.intervaloDias)) return null;
-    // días cubiertos = (cantidad / unidades_por_toma) * intervalo_en_días
-    return cantidad / parsed.unidadesPorToma * parsed.intervaloDias;
+    const pos = MotorIMID.parsePosologia(posologia);
+    if (!pos || !(cantidad > 0)) return null;
+    return MotorIMID.diasSuministro(pos, cantidad, 0);
   };
   const searchPatient = () => {
     if (!patientId.trim()) return;
@@ -2205,150 +3296,11 @@ function App() {
   };
 
   // =========================================================
-  // ====  CÁLCULO DE PERSISTENCIA + KAPLAN-MEIER  ===========
+  // ====  PERSISTENCIA (KAPLAN-MEIER) Y ADHERENCIA (PDC / MPR) =
   // =========================================================
-  const PERSIST_COVERAGE_DAYS = 91; // suministro real por dispensación (≈ 3 meses de tratamiento)
-  const PERSIST_GRACE_DAYS = 31; // margen de tolerancia para la reposición (≈ 1 mes)
-  const PERSIST_GAP_DAYS = PERSIST_COVERAGE_DAYS + PERSIST_GRACE_DAYS; // 122 días = gap permisible
-  const PERSIST_WASHOUT_MONTHS = 4; // período de lavado previo (diseño incident/new-user)
-  const PERSIST_MIN_AT_RISK = 10; // nº mínimo en riesgo para considerar fiable la cola de la curva
-  const PERSIST_Z = 1.96; // z para IC 95%
-
-  const MS_DAY = 1000 * 60 * 60 * 24;
-  const daysBetween = (a, b) => Math.round((b.getTime() - a.getTime()) / MS_DAY);
-
-  // Dataset base para todo el análisis de persistencia: aplica los filtros
-  // específicos de la sección (servicio + patología). NO usa los filtros generales.
-  const getPersistData = () => {
-    if (!data) return null;
-    let arr = data;
-    if (persistService) arr = arr.filter(r => r['Servicio Prescriptor'] === persistService);
-    if (persistPathology) arr = arr.filter(r => r['Patología'] === persistPathology);
-    return arr;
-  };
-
-  // Devuelve la primera fecha de dispensación válida sobre el dataset filtrado
-  const getTableFirstDate = () => {
-    const d = getPersistData();
-    if (!d) return null;
-    let min = null;
-    d.forEach(r => {
-      const dt = r['Fecha Dispensación'];
-      if (dt instanceof Date && !isNaN(dt)) {
-        if (!min || dt < min) min = dt;
-      }
-    });
-    return min;
-  };
-  const getTableLastDate = () => {
-    const d = getPersistData();
-    if (!d) return null;
-    let max = null;
-    d.forEach(r => {
-      const dt = r['Fecha Dispensación'];
-      if (dt instanceof Date && !isNaN(dt)) {
-        if (!max || dt > max) max = dt;
-      }
-    });
-    return max;
-  };
-  // Fecha mínima de inicio del análisis = primera dispensación + 4 meses
-  const getMinStartDate = () => {
-    const first = getTableFirstDate();
-    if (!first) return null;
-    const d = new Date(first);
-    d.setMonth(d.getMonth() + PERSIST_WASHOUT_MONTHS);
-    return d;
-  };
-
-  // Campo del medicamento según el modo
-  const persistField = () => persistMode === 'pa' ? 'Descripción Principio Activo' : 'Descripción Producto Dispensado';
-
-  // Lista de medicamentos disponibles según el modo, sobre el dataset filtrado
-  const getPersistMedList = () => {
-    const d = getPersistData();
-    if (!d) return [];
-    const f = persistField();
-    return [...new Set(d.filter(r => (parseInt(r['Cantidad']) || 0) > 0).map(r => r[f]).filter(Boolean).map(v => String(v).trim()))].sort();
-  };
-
-  // Estimador Kaplan-Meier con varianza de Greenwood, IC 95% (transformación log-log) y mediana.
-  // Recibe array de {time, event} (event=1 abandono, 0 censura administrativa).
-  const kaplanMeier = subjects => {
-    const z = PERSIST_Z;
-    const valid = subjects.filter(s => s.time >= 0);
-    const n = valid.length;
-    if (n === 0) return {
-      n: 0,
-      steps: [{
-        t: 0,
-        surv: 1,
-        atRisk: 0,
-        events: 0,
-        ciL: 1,
-        ciU: 1
-      }],
-      median: null,
-      medianReached: false
-    };
-    const eventTimes = [...new Set(valid.filter(s => s.event === 1).map(s => s.time))].sort((a, b) => a - b);
-    let surv = 1,
-      sumTerm = 0; // sumTerm = Σ d_i / (n_i (n_i - d_i)) para Greenwood
-    const steps = [{
-      t: 0,
-      surv: 1,
-      atRisk: n,
-      events: 0,
-      ciL: 1,
-      ciU: 1
-    }];
-    eventTimes.forEach(t => {
-      const atRisk = valid.filter(s => s.time >= t).length; // en riesgo justo antes de t
-      const d = valid.filter(s => s.event === 1 && s.time === t).length;
-      if (atRisk > 0) {
-        surv = surv * (1 - d / atRisk);
-        if (atRisk - d > 0) sumTerm += d / (atRisk * (atRisk - d));else sumTerm = Infinity;
-      }
-      // IC 95% por transformación complementaria log-log (acota en [0,1])
-      let ciL = surv,
-        ciU = surv;
-      if (surv > 0 && surv < 1 && isFinite(sumTerm) && sumTerm > 0) {
-        const lnS = Math.log(surv);
-        const seLL = Math.sqrt(sumTerm) / Math.abs(lnS); // se de ln(-ln S)
-        const cll = Math.log(-lnS);
-        ciU = Math.exp(-Math.exp(cll - z * seLL));
-        ciL = Math.exp(-Math.exp(cll + z * seLL));
-      } else if (surv <= 0) {
-        ciL = 0;
-        ciU = 0;
-      }
-      steps.push({
-        t,
-        surv,
-        atRisk,
-        events: d,
-        ciL,
-        ciU
-      });
-    });
-    // Mediana de persistencia: primer t con S(t) <= 0.5
-    let median = null,
-      medianReached = false;
-    for (const st of steps) {
-      if (st.surv <= 0.5) {
-        median = st.t;
-        medianReached = true;
-        break;
-      }
-    }
-    return {
-      n,
-      steps,
-      subjects: valid,
-      median,
-      medianReached
-    };
-  };
+  // El cálculo vive en motor_imid.js (MotorIMID) y está descrito en ESPECIFICACION_METODOLOGIA_IMID.md.
+  // Aquí solo se leen los parámetros de la interfaz, se llama al motor y se adaptan los resultados.
+  const PERSIST_WASHOUT_MONTHS = 4; // lo usa el análisis de esquemas de tratamiento (no la persistencia)
 
   // Probabilidad de supervivencia en un instante t (función escalón)
   const survAt = (steps, t) => {
@@ -2374,258 +3326,115 @@ function App() {
     }
     return r;
   };
-
   // Nº de sujetos aún en riesgo (no han tenido evento ni han sido censurados antes de t)
   const atRiskAt = (subjects, t) => subjects.filter(s => s.time >= t).length;
+
+  // Medicamentos disponibles según el modo y los filtros de servicio y patología (con su nº de pacientes).
+  // Solo aparecen los que tienen pacientes cuya primera dispensación del medicamento cumple los filtros,
+  // el mismo criterio que usa el cálculo.
+  const getPersistMedListPara = (modo, servicio, patologia) => {
+    const eng = engineRef.current;
+    if (!eng) return [];
+    const filtros = {
+      servicio: servicio ? [servicio] : [],
+      patologia: patologia ? [patologia] : []
+    };
+    return MotorIMID.elementosConFiltros(eng, modo === 'pa' ? 'pa' : 'producto', filtros).map(x => ({
+      nombre: x.valor,
+      pacientes: x.pacientes
+    }));
+  };
+  const getPersistMedList = () => getPersistMedListPara(persistMode, persistService, persistPathology);
+  // Al cambiar un filtro se quitan de la selección los medicamentos que dejan de estar disponibles
+  const cambiarFiltroPersist = (tipo, valor) => {
+    const servicio = tipo === 'servicio' ? valor : persistService;
+    const patologia = tipo === 'patologia' ? valor : persistPathology;
+    if (tipo === 'servicio') setPersistService(valor);else setPersistPathology(valor);
+    const disponibles = new Set(getPersistMedListPara(persistMode, servicio, patologia).map(m => m.nombre));
+    setPersistSelected(prev => new Set([...prev].filter(n => disponibles.has(n))));
+    setPersistResults(null);
+  };
+  // Primera fecha permitida para el inicio del análisis (1ª dispensación + lavado) y última fecha del fichero
+  const getPersistMinStart = () => {
+    const eng = engineRef.current;
+    if (!eng || eng.fechaMin === null) return null;
+    const lav = Number(persistParams.lavadoMeses);
+    return MotorIMID.diaADate(MotorIMID.sumarMeses(eng.fechaMin, Number.isInteger(lav) && lav >= 0 ? lav : MotorIMID.DEFECTO.lavadoMeses));
+  };
+  const getPersistLastDate = () => {
+    const eng = engineRef.current;
+    return eng && eng.fechaMax !== null ? MotorIMID.diaADate(eng.fechaMax) : null;
+  };
+  // Actualiza un parámetro numérico (admite el campo vacío mientras se escribe)
+  const setPersistParam = (clave, valor) => {
+    setPersistParams(prev => ({
+      ...prev,
+      [clave]: valor === '' ? '' : typeof valor === 'boolean' ? valor : Number(valor)
+    }));
+    setPersistResults(null);
+  };
+  const PERSIST_PARAMS_NUMERICOS = ['lavadoMeses', 'tolerancia', 'ventanaNuevo', 'solape', 'umbralAdherencia', 'pdcMinDias', 'umbralMPR', 'umbralSobrante', 'umbralAdelanto', 'minEnRiesgo', 'faltDiasMin', 'faltUmbral'];
   const calcularPersistencia = () => {
     setPersistError('');
     setPersistResults(null);
-    if (!data) {
+    const eng = engineRef.current;
+    if (!data || !eng) {
       setPersistError('Carga la tabla para continuar.');
+      return;
+    }
+    if (eng.error || engineInfo && engineInfo.error) {
+      setPersistError('No se pudieron depurar los datos del fichero cargado.');
       return;
     }
     if (persistSelected.size === 0) {
       setPersistError('Selecciona al menos un medicamento.');
       return;
     }
-    const minStart = getMinStartDate();
-    const tableLast = getTableLastDate();
-    if (!minStart || !tableLast) {
-      setPersistError('No hay fechas de dispensación válidas en la tabla.');
+    const invalidos = PERSIST_PARAMS_NUMERICOS.filter(k => persistParams[k] === '' || !Number.isFinite(Number(persistParams[k])));
+    if (invalidos.length) {
+      setPersistError('Revisa los parámetros del cálculo: hay campos vacíos o no numéricos.');
+      setShowPersistAdvanced(true);
       return;
     }
-    if (!persistStartDate) {
-      setPersistError('Introduce la fecha de inicio del análisis.');
+    const n = k => Number(persistParams[k]);
+    const P = {
+      modo: persistMode === 'pa' ? 'pa' : 'producto',
+      elementos: [...persistSelected],
+      desde: persistStartDate || null,
+      finInclusion: persistInclusionEnd || null,
+      hasta: persistObsEnd || null,
+      lavadoMeses: n('lavadoMeses'),
+      tolerancia: n('tolerancia'),
+      ventanaNuevo: n('ventanaNuevo'),
+      solape: n('solape'),
+      umbralAdherencia: n('umbralAdherencia'),
+      pdcMinDias: n('pdcMinDias'),
+      umbralMPR: n('umbralMPR'),
+      umbralSobrante: n('umbralSobrante'),
+      umbralAdelanto: n('umbralAdelanto'),
+      minEnRiesgo: n('minEnRiesgo'),
+      cohorte: persistCohort,
+      // Los filtros se evalúan sobre la dispensación índice; la historia previa no se recorta
+      filtros: {
+        servicio: persistService ? [persistService] : [],
+        patologia: persistPathology ? [persistPathology] : []
+      },
+      excluirFaltantes: !!persistParams.excluirFaltantes,
+      periodosFaltantes: MotorIMID.detectarPeriodosFaltantes(eng.disps, {
+        diasMin: n('faltDiasMin'),
+        umbralVolumen: n('faltUmbral') / 100
+      })
+    };
+    const res = MotorIMID.analizar(eng, P);
+    if (res.errores && res.errores.length) {
+      setPersistError(res.errores.join(' '));
       return;
     }
-    const startDate = new Date(persistStartDate + 'T00:00:00');
-    if (isNaN(startDate)) {
-      setPersistError('Fecha de inicio no válida.');
-      return;
-    }
-
-    // Validación: la fecha de inicio debe ser >= primera dispensación + 4 meses
-    if (startDate < minStart) {
-      setPersistError(`La fecha de inicio debe ser, al menos, 4 meses posterior a la primera dispensación de la tabla. Fecha mínima permitida: ${minStart.toLocaleDateString('es-ES')}.`);
-      return;
-    }
-
-    // Fin de la ventana de observación (por defecto, última fecha de la tabla)
-    let obsEnd = persistObsEnd ? new Date(persistObsEnd + 'T23:59:59') : new Date(tableLast);
-    if (isNaN(obsEnd)) {
-      setPersistError('Fecha de fin de observación no válida.');
-      return;
-    }
-    if (obsEnd > tableLast) obsEnd = new Date(tableLast); // no hay datos más allá de la tabla
-
-    // Fin de la ventana de inclusión / reclutamiento (por defecto, fin de observación)
-    let inclusionEnd = persistInclusionEnd ? new Date(persistInclusionEnd + 'T23:59:59') : new Date(obsEnd);
-    if (isNaN(inclusionEnd)) {
-      setPersistError('Fecha de fin de inclusión no válida.');
-      return;
-    }
-    if (inclusionEnd < startDate) {
-      setPersistError('El fin de la ventana de inclusión no puede ser anterior a la fecha de inicio.');
-      return;
-    }
-    if (obsEnd < inclusionEnd) {
-      setPersistError('El fin de la observación no puede ser anterior al fin de la inclusión.');
-      return;
-    }
-    const f = persistField();
-    const meds = [...persistSelected];
-
-    // Pre-indexar dispensaciones positivas por paciente (ordenadas por fecha).
-    // Se trabaja sobre el dataset filtrado por servicio/patología (universo cerrado A).
-    const baseData = getPersistData();
-    const byPatient = {};
-    baseData.forEach(r => {
-      if ((parseInt(r['Cantidad']) || 0) <= 0) return; // ignorar devoluciones
-      const d = r['Fecha Dispensación'];
-      if (!(d instanceof Date) || isNaN(d)) return;
-      const id = String(r['Id'] || '').trim();
-      if (!id) return;
-      (byPatient[id] = byPatient[id] || []).push(r);
-    });
-    Object.values(byPatient).forEach(arr => arr.sort((a, b) => a['Fecha Dispensación'] - b['Fecha Dispensación']));
-    const perMed = [];
-    meds.forEach(med => {
-      const medUp = String(med).trim();
-      // Pacientes que INICIAN este medicamento en el período de estudio (>= startDate)
-      // y que NO tuvieron dispensación de ESTE medicamento en el período previo (washout)
-      const subjects = []; // {id, time, event, naive, prevTreatments:[], firstDate, lastDate}
-
-      Object.keys(byPatient).forEach(id => {
-        const disps = byPatient[id];
-        const medDisps = disps.filter(r => String(r[f] || '').trim() === medUp);
-        if (medDisps.length === 0) return;
-        const firstMed = medDisps[0]['Fecha Dispensación'];
-        const firstMedPathology = String(medDisps[0]['Patología'] || '').trim() || null; // patología de la 1ª dispensación
-
-        // VENTANA DE INCLUSIÓN: el inicio del medicamento debe caer en [startDate, inclusionEnd]
-        if (firstMed < startDate) return;
-        if (firstMed > inclusionEnd) return;
-
-        // WASHOUT (diseño de nuevo usuario): no debe haber dispensaciones de ESTE medicamento antes de startDate
-        const medBeforeStart = medDisps.some(r => r['Fecha Dispensación'] < startDate);
-        if (medBeforeStart) return;
-
-        // NAIVE = sin NINGUNA dispensación (de cualquier medicamento) antes de firstMed (universo filtrado).
-        const dispsBefore = disps.filter(r => r['Fecha Dispensación'] < firstMed);
-        const isNaive = dispsBefore.length === 0;
-        const prevTreatments = [...new Set(dispsBefore.map(r => String(r[f] || '').trim()).filter(v => v && v !== medUp))];
-
-        // ---- Cálculo del tiempo de persistencia (días desde firstMed) ----
-        // Solo se consideran dispensaciones hasta el FIN DE OBSERVACIÓN (corte administrativo).
-        const medDates = medDisps.map(r => r['Fecha Dispensación']).filter(d => d >= firstMed && d <= obsEnd);
-        const lastMed = medDates[medDates.length - 1];
-
-        // Cambio de tratamiento: primera dispensación de OTRO medicamento en (firstMed, obsEnd]
-        const switchRec = disps.filter(r => {
-          const nm = String(r[f] || '').trim();
-          return nm && nm !== medUp && r['Fecha Dispensación'] > firstMed && r['Fecha Dispensación'] <= obsEnd;
-        }).sort((a, b) => a['Fecha Dispensación'] - b['Fecha Dispensación'])[0] || null;
-        const switchDate = switchRec ? switchRec['Fecha Dispensación'] : null;
-        const switchMed = switchRec ? String(switchRec[f] || '').trim() : null;
-
-        // Discontinuación por GAP. La fecha del evento es el fin de cobertura del último envase
-        // antes del hueco (datación por suministro = última disp. + COBERTURA).
-        let gapDiscontDate = null;
-        for (let i = 1; i < medDates.length; i++) {
-          if (daysBetween(medDates[i - 1], medDates[i]) > PERSIST_GAP_DAYS) {
-            gapDiscontDate = new Date(medDates[i - 1].getTime() + PERSIST_COVERAGE_DAYS * MS_DAY);
-            break;
-          }
-        }
-        // Si no hubo hueco interno, evaluar la cola hasta el fin de observación:
-        if (!gapDiscontDate) {
-          const gapToEnd = daysBetween(lastMed, obsEnd);
-          if (gapToEnd > PERSIST_GAP_DAYS) {
-            // El gap desde la última dispensación supera el permisible => discontinuación
-            gapDiscontDate = new Date(lastMed.getTime() + PERSIST_COVERAGE_DAYS * MS_DAY);
-          }
-          // Si gapToEnd <= gap permisible => el paciente sigue dentro de ventana => se censurará en obsEnd
-        }
-
-        // Fin de persistencia = el más temprano entre discontinuación por gap y cambio de tratamiento.
-        // Si no hay ninguno => censura administrativa en el fin de observación (sigue en tratamiento).
-        let event = 0,
-          time = 0,
-          outcome = 'censored';
-        const candidates = [];
-        if (gapDiscontDate) candidates.push({
-          date: gapDiscontDate,
-          type: 'gap'
-        });
-        if (switchDate) candidates.push({
-          date: switchDate,
-          type: 'switch'
-        });
-        candidates.sort((a, b) => a.date - b.date);
-        if (candidates.length > 0) {
-          const end = candidates[0];
-          event = 1;
-          time = Math.max(0, daysBetween(firstMed, end.date));
-          outcome = end.type; // 'gap' | 'switch'
-        } else {
-          // Censura administrativa en el fin de observación (paciente persistente al cierre)
-          event = 0;
-          time = Math.max(0, daysBetween(firstMed, obsEnd));
-          outcome = 'censored';
-        }
-        // Seguridad: el tiempo nunca puede exceder el seguimiento máximo disponible
-        const maxFollow = Math.max(0, daysBetween(firstMed, obsEnd));
-        if (time > maxFollow) {
-          time = maxFollow;
-          if (event === 1) {
-            event = 0;
-            outcome = 'censored';
-          }
-        }
-
-        // ---- Datos para el modal "Ver detalle" ----
-        let prevTreatment = null,
-          prevTreatmentDate = null;
-        for (let i = disps.length - 1; i >= 0; i--) {
-          const r = disps[i];
-          const name = String(r[f] || '').trim();
-          if (r['Fecha Dispensación'] < firstMed && name && name !== medUp) {
-            prevTreatment = name;
-            prevTreatmentDate = r['Fecha Dispensación'];
-            break;
-          }
-        }
-        let nextTreatment = null,
-          nextTreatmentDate = null;
-        for (let i = 0; i < disps.length; i++) {
-          const r = disps[i];
-          const name = String(r[f] || '').trim();
-          if (r['Fecha Dispensación'] > lastMed && r['Fecha Dispensación'] <= obsEnd && name && name !== medUp) {
-            nextTreatment = name;
-            nextTreatmentDate = r['Fecha Dispensación'];
-            break;
-          }
-        }
-        if (outcome === 'switch' && switchMed) {
-          nextTreatment = switchMed;
-          nextTreatmentDate = switchDate;
-        }
-        subjects.push({
-          id,
-          time,
-          event,
-          naive: isNaive,
-          prevTreatments,
-          firstDate: firstMed,
-          lastDate: lastMed,
-          pathology: firstMedPathology,
-          outcome,
-          prevTreatment,
-          prevTreatmentDate,
-          nextTreatment,
-          nextTreatmentDate
-        });
-      });
-
-      // Filtrar por cohorte seleccionada
-      let cohortSubjects = subjects;
-      if (persistCohort === 'naive') cohortSubjects = subjects.filter(s => s.naive);else if (persistCohort === 'noNaive') cohortSubjects = subjects.filter(s => !s.naive);
-
-      // Recuento de tratamientos previos SOLO sobre la cohorte analizada y SOLO de pacientes no naive
-      const prevTreatmentCount = {};
-      cohortSubjects.forEach(s => {
-        if (s.naive) return;
-        if (s.prevTreatments.length === 0) {
-          prevTreatmentCount['(previo no identificado)'] = (prevTreatmentCount['(previo no identificado)'] || 0) + 1;
-        } else {
-          s.prevTreatments.forEach(t => {
-            prevTreatmentCount[t] = (prevTreatmentCount[t] || 0) + 1;
-          });
-        }
-      });
-
-      // Cifras del resumen, referidas a la cohorte seleccionada
-      const cohortNaiveN = cohortSubjects.filter(s => s.naive).length;
-      const cohortNoNaiveN = cohortSubjects.length - cohortNaiveN;
-      const km = kaplanMeier(cohortSubjects);
-      perMed.push({
-        med: medUp,
-        totalAll: cohortSubjects.length,
-        // total de la cohorte analizada
-        naiveN: cohortNaiveN,
-        noNaiveN: cohortNoNaiveN,
-        cohortN: cohortSubjects.length,
-        prevTreatments: Object.keys(prevTreatmentCount).map(t => ({
-          name: t,
-          n: prevTreatmentCount[t]
-        })).sort((a, b) => b.n - a.n),
-        km,
-        subjects: cohortSubjects
-      });
-    });
+    const sensibilidad = MotorIMID.sensibilidadTolerancia(eng, P);
+    const perMed = res.resultados;
 
     // Construir los puntos temporales según granularidad (en días)
-    let stepDays, maxLabel, labelFn;
+    let stepDays, labelFn;
     if (persistGranularity === 'months') {
       stepDays = 30.4375;
       labelFn = i => `${i} m`;
@@ -2665,7 +3474,7 @@ function App() {
           nPersist: Math.round(c.surv * m.cohortN),
           // estimación S(t)×N
           atRisk,
-          reliable: atRisk >= PERSIST_MIN_AT_RISK
+          reliable: atRisk >= P.minEnRiesgo
         };
       });
     });
@@ -2677,15 +3486,17 @@ function App() {
       mode: persistMode,
       service: persistService,
       pathology: persistPathology,
-      startDate,
-      inclusionEnd,
-      obsEnd,
-      minStart,
-      tableLast,
-      coverageDays: PERSIST_COVERAGE_DAYS,
-      graceDays: PERSIST_GRACE_DAYS,
-      gapDays: PERSIST_GAP_DAYS,
-      minAtRisk: PERSIST_MIN_AT_RISK,
+      startDate: MotorIMID.diaADate(res.parametros.desde),
+      inclusionEnd: MotorIMID.diaADate(res.parametros.finInclusion),
+      obsEnd: MotorIMID.diaADate(res.parametros.hasta),
+      minStart: getPersistMinStart(),
+      tableLast: getPersistLastDate(),
+      params: res.parametros,
+      comparacion: res.comparacion,
+      avisos: res.avisos,
+      faltantes: res.faltantes,
+      sensibilidad,
+      minAtRisk: P.minEnRiesgo,
       generatedAt: new Date()
     });
   };
@@ -4692,15 +5503,85 @@ function App() {
         });
         y += 5;
       });
+      y += 6;
+
+      // ── Adherencia (PDC y MPR) dentro del episodio de persistencia ──
+      const ad = m.adherencia;
+      if (ad) {
+        const prm = persistResults.params;
+        const f1 = v => v === null || v === undefined ? '-' : v.toFixed(1).replace('.', ',');
+        const sm = ad.resumen;
+        y = ensureSpace(y, 40);
+        pdf.setFontSize(8);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setTextColor(...C_DARK);
+        pdf.text('Adherencia durante el episodio de persistencia (PDC y MPR)', M, y + 3);
+        y += 6;
+        const filasAd = [[`Pacientes evaluables / excluidos (periodo < ${prm.pdcMinDias} d)`, `${sm.n} / ${ad.excluidos.length}` + (ad.pctExcluidos !== null ? ` (${f1(ad.pctExcluidos)} % excluidos)` : '')], ['PDC: mediana (RIC) · media', sm.n ? `${f1(sm.mediana)} % (${f1(sm.p25)}-${f1(sm.p75)}) · ${f1(sm.media)} %` : '-'], [`Adherentes (PDC >= ${prm.umbralAdherencia} %)`, sm.n ? `${sm.adherentes} (${f1(sm.pctAdherentes)} %)` : '-'], ['MPR: mediana · alertas de acumulación', sm.n ? `${f1(sm.mprMediana)} % · ${sm.alertas} (${f1(sm.pctAlertas)} %)` : '-'], ['PDC a 6 meses: n · mediana · % adherentes', ad.ventana6.n ? `${ad.ventana6.n} · ${f1(ad.ventana6.mediana)} % · ${f1(ad.ventana6.pctAdherentes)} %` : '-'], ['PDC a 12 meses: n · mediana · % adherentes', ad.ventana12.n ? `${ad.ventana12.n} · ${f1(ad.ventana12.mediana)} % · ${f1(ad.ventana12.pctAdherentes)} %` : '-']];
+        pdf.setFontSize(7);
+        pdf.setFont('helvetica', 'normal');
+        filasAd.forEach((fl, i) => {
+          y = ensureSpace(y, 6);
+          if (i % 2 === 0) {
+            pdf.setFillColor(248, 250, 252);
+            pdf.rect(M, y, contentW, 5, 'F');
+          }
+          pdf.setTextColor(60, 60, 60);
+          pdf.text(fl[0], M + 2, y + 3.5);
+          pdf.setFont('helvetica', 'bold');
+          pdf.text(fl[1], M + contentW - 2, y + 3.5, {
+            align: 'right'
+          });
+          pdf.setFont('helvetica', 'normal');
+          y += 5;
+        });
+      }
       y += 8;
     });
+
+    // ── Comparación entre fármacos (log-rank) ──
+    if (persistResults.comparacion && persistResults.comparacion.logRank && persistResults.comparacion.logRank.p !== null) {
+      const lr = persistResults.comparacion.logRank;
+      y = ensureSpace(y, 14);
+      pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(...C_DARK);
+      pdf.text('Comparación de las curvas (log-rank)', M, y + 3);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(60, 60, 60);
+      pdf.text(`chi-cuadrado = ${lr.chi2.toFixed(2).replace('.', ',')} · gl = ${lr.gl} · p ${lr.p < 0.001 ? '< 0,001' : '= ' + lr.p.toFixed(3).replace('.', ',')}`, M, y + 8);
+      if (persistResults.comparacion.pacientesEnVariosGrupos) {
+        pdf.setTextColor(200, 120, 40);
+        pdf.text(`Aviso: ${persistResults.comparacion.pacientesEnVariosGrupos} pacientes aparecen en más de una curva; el test no es formalmente válido.`, M, y + 12.5);
+        y += 4.5;
+      }
+      y += 14;
+    }
+
+    // ── Periodos sin datos ──
+    if (persistResults.faltantes && persistResults.faltantes.length) {
+      y = ensureSpace(y, 16);
+      pdf.setFontSize(8);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(...C_DARK);
+      pdf.text('Periodos sin datos de dispensación en el fichero', M, y + 3);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(7.5);
+      pdf.setTextColor(60, 60, 60);
+      const txtF = persistResults.faltantes.map(pf => `${MotorIMID.diaATexto(pf.ini)} - ${MotorIMID.diaATexto(pf.fin)}`).join('  ·  ');
+      const lf = pdf.splitTextToSize(txtF + (persistResults.params.excluirFaltantes ? '  (excluidos de los cálculos de persistencia y adherencia)' : '  (NO excluidos de los cálculos)'), contentW);
+      pdf.text(lf, M, y + 8);
+      y += 10 + lf.length * 3.5;
+    }
 
     // ── Nota metodológica ──
     y = ensureSpace(y, 28);
     pdf.setFontSize(6.5);
     pdf.setFont('helvetica', 'italic');
     pdf.setTextColor(...C_TEXT_SOFT);
-    const nota = `Metodología: diseño de nuevo usuario con lavado de 4 meses previo al inicio. Solo se incluyen pacientes que inician el tratamiento dentro de la ventana de inclusión. Persistencia estimada por Kaplan-Meier. Fin de persistencia (evento) = discontinuación por falta de reposición (hueco entre dispensaciones > ${persistResults.gapDays} días = ${persistResults.coverageDays} de cobertura + ${persistResults.graceDays} de margen), fechado al agotarse la cobertura del último envase; o cambio a otro medicamento, lo que ocurra antes. Censura administrativa en el fin de observación para quienes siguen en tratamiento. IC 95% por transformación log-log (varianza de Greenwood). (*) = menos de ${persistResults.minAtRisk} pacientes en riesgo: estimación poco fiable. "Persist. (est.)" = S(t) × n. Cada medicamento se analiza de forma independiente.`;
+    const prm = persistResults.params;
+    const nota = `Metodología (ver ESPECIFICACION_METODOLOGIA_IMID): diseño de nuevo usuario con ${prm.lavadoMeses} meses de historia previa (lavado) para identificar pacientes naive; solo se incluyen pacientes que inician el tratamiento dentro de la ventana de inclusión. La cobertura de cada dispensación se calcula con su cantidad y su posología (los solapamientos se desplazan). Persistencia estimada por Kaplan-Meier. Fin de persistencia (evento) = hueco sin cobertura superior a ${prm.tolerancia} días tras agotarse el suministro (fechado en el último día cubierto) o cambio a otro fármaco nuevo (ventana de fármaco nuevo de ${prm.ventanaNuevo} d y solape de transición de ${prm.solape} d), lo que ocurra antes. ${persistResults.mode === 'pa' ? 'En principios activos, el cambio de marca con el mismo principio activo no es abandono.' : 'En presentaciones comerciales, el cambio de marca (incluso con el mismo principio activo) cuenta como evento.'} Censura administrativa en el fin de observación. IC 95% por transformación log-log (varianza de Greenwood). (*) = menos de ${persistResults.minAtRisk} pacientes en riesgo: estimación poco fiable. "Persist. (est.)" = S(t) × n. Adherencia: PDC (método de elección) y MPR calculados dentro del episodio de persistencia; el PDC a 6 y 12 meses cuenta como no cubierto todo lo posterior al abandono. Cada medicamento se analiza de forma independiente.`;
     const notaLines = pdf.splitTextToSize(nota, contentW);
     pdf.text(notaLines, M, y + 3);
     addPDFFooter(pdf);
@@ -12456,143 +13337,6 @@ function App() {
   };
 
   // Distribución poblacional de adherencia (MPR) — misma metodología que el histórico por paciente
-  const calculateAdherenceDistribution = dataToProcess => {
-    const validData = dataToProcess.filter(row => row['Fecha Dispensación'] && row['Id'] != null && String(row['Id']).trim() !== '');
-    // Agrupar dispensaciones por paciente
-    const byPatient = new Map();
-    validData.forEach(row => {
-      const id = String(row['Id']).trim();
-      if (!byPatient.has(id)) byPatient.set(id, []);
-      byPatient.get(id).push(row);
-    });
-    const mprValues = []; // MPR de cada tratamiento evaluable
-    let noEvaluables = 0; // tratamientos con <2 disp. o posología no interpretable
-
-    byPatient.forEach(rows => {
-      // Ordenar cronológicamente (y por medicamento en empate)
-      const sorted = rows.filter(r => (parseInt(r['Cantidad']) || 0) > 0).sort((a, b) => {
-        const da = a['Fecha Dispensación'].getTime(),
-          db = b['Fecha Dispensación'].getTime();
-        if (da !== db) return da - db;
-        return (a['Descripción Producto Dispensado'] || '').localeCompare(b['Descripción Producto Dispensado'] || '');
-      });
-      // Agrupar en episodios contiguos por principio activo
-      const tratamientos = [];
-      let cur = null;
-      sorted.forEach(row => {
-        const pa = (row['Descripción Principio Activo'] || 'DESCONOCIDO').trim();
-        if (!cur || cur.pa !== pa) {
-          if (cur) tratamientos.push(cur);
-          cur = {
-            pa,
-            disps: []
-          };
-        }
-        cur.disps.push(row);
-      });
-      if (cur) tratamientos.push(cur);
-      tratamientos.forEach(tto => {
-        const disps = tto.disps;
-        if (disps.length < 2) {
-          noEvaluables++;
-          return;
-        }
-        const first = disps[0]['Fecha Dispensación'],
-          last = disps[disps.length - 1]['Fecha Dispensación'];
-        const diasTotales = Math.round((last.getTime() - first.getTime()) / 86400000);
-        if (diasTotales <= 0) {
-          noEvaluables++;
-          return;
-        }
-        let diasCubiertos = 0,
-          noParse = 0;
-        disps.slice(0, -1).forEach(row => {
-          const dias = calcularDiasCubiertos(parseInt(row['Cantidad']) || 0, row['Posología (Según Prescripción)'] || '');
-          if (dias !== null) diasCubiertos += dias;else noParse++;
-        });
-        if (noParse > 0) {
-          noEvaluables++;
-          return;
-        }
-        mprValues.push(diasCubiertos / diasTotales * 100);
-      });
-    });
-
-    // Histograma por tramos
-    const bins = [{
-      label: '0–20%',
-      min: 0,
-      max: 20,
-      color: 'rgba(192,57,43,0.85)'
-    }, {
-      label: '20–40%',
-      min: 20,
-      max: 40,
-      color: 'rgba(231,76,60,0.8)'
-    }, {
-      label: '40–60%',
-      min: 40,
-      max: 60,
-      color: 'rgba(230,126,34,0.8)'
-    }, {
-      label: '60–80%',
-      min: 60,
-      max: 80,
-      color: 'rgba(241,196,15,0.85)'
-    }, {
-      label: '80–100%',
-      min: 80,
-      max: 100.0001,
-      color: 'rgba(39,174,96,0.85)'
-    }, {
-      label: '>100% (acúmulo)',
-      min: 100.0001,
-      max: Infinity,
-      color: 'rgba(41,128,185,0.8)'
-    }];
-    const counts = bins.map(() => 0);
-    mprValues.forEach(v => {
-      for (let i = 0; i < bins.length; i++) {
-        if (v >= bins[i].min && v < bins[i].max) {
-          counts[i]++;
-          break;
-        }
-      }
-    });
-    const n = mprValues.length;
-    const sorted = [...mprValues].sort((a, b) => a - b);
-    const mediana = n ? n % 2 ? sorted[(n - 1) / 2] : (sorted[n / 2 - 1] + sorted[n / 2]) / 2 : 0;
-    const media = n ? mprValues.reduce((s, v) => s + v, 0) / n : 0;
-    const pctAlta = n ? mprValues.filter(v => v >= 80).length / n * 100 : 0;
-    const fmtPct1 = x => x.toFixed(1).replace('.', ',') + '%';
-    const data = bins.map((b, i) => ({
-      'Tramo de adherencia': b.label,
-      'Tratamientos': counts[i],
-      '% del total': n ? fmtPct1(counts[i] / n * 100) : '0,0%'
-    }));
-    return {
-      type: 'histogram',
-      title: `Distribución de adherencia (MPR) · ${n} tratamientos evaluables · mediana ${fmtPct1(mediana)} · ${fmtPct1(pctAlta)} con MPR≥80%`,
-      chartData: {
-        labels: bins.map(b => b.label),
-        counts,
-        colors: bins.map(b => b.color),
-        xTitle: 'Tramo de adherencia (MPR)',
-        yTitle: 'Nº de tratamientos'
-      },
-      summary: {
-        n,
-        mediana,
-        media,
-        pctAlta,
-        noEvaluables
-      },
-      data,
-      columnOrder: ['Tramo de adherencia', 'Tratamientos', '% del total'],
-      note: `Un "tratamiento" = episodio contiguo de un mismo principio activo en un paciente. Se excluyen ${noEvaluables} tratamientos no evaluables (menos de 2 dispensaciones, mismo día, o posología no interpretable). MPR = días cubiertos / días entre primera y última dispensación.`
-    };
-  };
-
   // Flujos de cambio de tratamiento (switching) entre principios activos
   // selectedSources: Set de fármacos de ORIGEN (A) a incluir. null = todos.
   //   Las trayectorias se calculan SIEMPRE con todas las dispensaciones activas;
@@ -12774,9 +13518,6 @@ function App() {
           break;
         case 'pareto-coste':
           result = calculateCostPareto(dataToProcess);
-          break;
-        case 'adherencia':
-          result = calculateAdherenceDistribution(dataToProcess);
           break;
         case 'switching':
           result = calculateSwitching(dataToProcess, sankeySrcSet);
@@ -14519,7 +15260,7 @@ function App() {
     className: "header"
   }, /*#__PURE__*/React.createElement("div", {
     className: "header-text"
-  }, /*#__PURE__*/React.createElement("h1", null, "\uD83C\uDFE5 VIGIA-IMID"), /*#__PURE__*/React.createElement("p", null, "Visor de Indicadores de Gesti\xF3n e Impacto Asistencial en farmacoterapia de patolog\xEDas inflamatorias inmunomediadas \xB7 Farmacia Hospitalaria \xB7 H. U. i P. La Fe \xB7 ", /*#__PURE__*/React.createElement("strong", null, "v39"))), (() => {
+  }, /*#__PURE__*/React.createElement("h1", null, "\uD83C\uDFE5 VIGIA-IMID"), /*#__PURE__*/React.createElement("p", null, "Visor de Indicadores de Gesti\xF3n e Impacto Asistencial en farmacoterapia de patolog\xEDas inflamatorias inmunomediadas \xB7 Farmacia Hospitalaria \xB7 H. U. i P. La Fe \xB7 ", /*#__PURE__*/React.createElement("strong", null, "v42"))), (() => {
     const activeCount = [filters.year, filters.service, filters.pathology, filters.activeIngredient, filters.dateFrom, filters.dateTo].filter(Boolean).length + (paFilterMode === 'selection' && selectedPASet.size > 0 ? 1 : 0);
     return activeCount > 0 ? /*#__PURE__*/React.createElement("div", {
       style: {
@@ -14606,7 +15347,50 @@ function App() {
     onChange: e => handleFileUpload(e.target.files[0])
   })), data && !dataWarnings && /*#__PURE__*/React.createElement("div", {
     className: "alert alert-success"
-  }, "\u2705 Archivo validado correctamente. Selecciona una opci\xF3n del men\xFA para continuar."), data && dataWarnings && /*#__PURE__*/React.createElement("div", {
+  }, "\u2705 Archivo validado correctamente. Selecciona una opci\xF3n del men\xFA para continuar."), data && engineInfo && !engineInfo.error && engineInfo.faltantes.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fff8e6',
+      border: '1px solid #ffe0a3',
+      borderRadius: 'var(--radius)',
+      padding: '0.9rem 1.1rem',
+      marginBottom: '1rem',
+      color: '#7a5b00',
+      fontSize: '0.86rem',
+      lineHeight: 1.6
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "\uD83D\uDCC5 ", engineInfo.faltantes.length === 1 ? 'Se ha detectado 1 periodo' : `Se han detectado ${engineInfo.faltantes.length} periodos`, " sin dispensaciones en el fichero (probable falta de datos):"), /*#__PURE__*/React.createElement("ul", {
+    style: {
+      margin: '0.4rem 0 0 1.1rem'
+    }
+  }, engineInfo.faltantes.map(pf => /*#__PURE__*/React.createElement("li", {
+    key: pf.ini
+  }, MotorIMID.diaATexto(pf.ini), " \u2013 ", MotorIMID.diaATexto(pf.fin), " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      opacity: 0.75
+    }
+  }, "(", pf.diasLaborables, " d\xEDas laborables sin actividad)")))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: '0.4rem'
+    }
+  }, "Los an\xE1lisis de ", /*#__PURE__*/React.createElement("strong", null, "persistencia y adherencia"), " los excluyen de los c\xE1lculos (se puede desactivar en sus par\xE1metros avanzados). Los ", /*#__PURE__*/React.createElement("strong", null, "recuentos por mes, trimestre o a\xF1o"), " no se corrigen: los meses afectados mostrar\xE1n menos dispensaciones y pacientes de los reales.")), data && engineInfo && !engineInfo.error && engineInfo.informe && /*#__PURE__*/React.createElement("details", {
+    style: {
+      marginBottom: '1rem',
+      fontSize: '0.84rem',
+      color: 'var(--texto-sec)'
+    }
+  }, /*#__PURE__*/React.createElement("summary", {
+    style: {
+      cursor: 'pointer',
+      fontWeight: 600
+    }
+  }, "\uD83D\uDD0E Calidad de los datos (depuraci\xF3n para persistencia y adherencia)"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: '0.6rem 0.2rem',
+      lineHeight: 1.7
+    }
+  }, /*#__PURE__*/React.createElement("div", null, "Dispensaciones v\xE1lidas: ", /*#__PURE__*/React.createElement("strong", null, engineInfo.informe.dispensacionesValidas.toLocaleString('es-ES')), " de ", engineInfo.informe.filasLeidas.toLocaleString('es-ES'), " filas \xB7 pacientes: ", /*#__PURE__*/React.createElement("strong", null, engineInfo.informe.pacientes.toLocaleString('es-ES'))), /*#__PURE__*/React.createElement("div", null, "Duplicados exactos eliminados: ", /*#__PURE__*/React.createElement("strong", null, engineInfo.informe.duplicados), " \xB7 devoluciones: ", /*#__PURE__*/React.createElement("strong", null, engineInfo.informe.devoluciones), " (restadas de la dispensaci\xF3n original; ", engineInfo.informe.devolucionesNoAplicadas, " sin dispensaci\xF3n previa, descartadas)"), /*#__PURE__*/React.createElement("div", null, "Suministro calculado a partir de la posolog\xEDa: interpretada ", /*#__PURE__*/React.createElement("strong", null, engineInfo.informe.posologiaInterpretada.toLocaleString('es-ES')), " \xB7 dosis en MG/ML/envase (supuesto) ", /*#__PURE__*/React.createElement("strong", null, engineInfo.informe.posologiaSupuesta), " \xB7 respaldo del propio paciente ", /*#__PURE__*/React.createElement("strong", null, engineInfo.informe.posologiaRespaldoPaciente), " \xB7 respaldo del producto ", /*#__PURE__*/React.createElement("strong", null, engineInfo.informe.posologiaRespaldoProducto), " \xB7 excluidas ", /*#__PURE__*/React.createElement("strong", null, engineInfo.informe.posologiaNoInterpretable)), engineInfo.avisos.map((a, i) => /*#__PURE__*/React.createElement("div", {
+    key: i
+  }, "\u26A0\uFE0F ", a)))), data && dataWarnings && /*#__PURE__*/React.createElement("div", {
     style: {
       background: dataWarnings.faltanEsenciales.length ? '#fdecea' : '#fff3cd',
       border: '1px solid ' + (dataWarnings.faltanEsenciales.length ? '#f5c6cb' : '#ffeeba'),
@@ -14647,7 +15431,9 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "filter-group"
-  }, /*#__PURE__*/React.createElement("label", null, "A\xF1o"), /*#__PURE__*/React.createElement("select", {
+  }, /*#__PURE__*/React.createElement("label", null, "A\xF1o", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Restringe todos los an\xE1lisis a las dispensaciones del a\xF1o elegido."
+  })), /*#__PURE__*/React.createElement("select", {
     value: filters.year,
     onChange: e => setFilters({
       ...filters,
@@ -14660,7 +15446,9 @@ function App() {
     value: year
   }, year)))), /*#__PURE__*/React.createElement("div", {
     className: "filter-group"
-  }, /*#__PURE__*/React.createElement("label", null, "Servicio prescriptor"), /*#__PURE__*/React.createElement("select", {
+  }, /*#__PURE__*/React.createElement("label", null, "Servicio prescriptor", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Restringe los an\xE1lisis a las dispensaciones prescritas por ese servicio. No afecta a la persistencia y la adherencia, que tienen sus propios filtros."
+  })), /*#__PURE__*/React.createElement("select", {
     value: filters.service,
     onChange: e => setFilters({
       ...filters,
@@ -14673,7 +15461,9 @@ function App() {
     value: service
   }, service)))), /*#__PURE__*/React.createElement("div", {
     className: "filter-group"
-  }, /*#__PURE__*/React.createElement("label", null, "Patolog\xEDa"), /*#__PURE__*/React.createElement("select", {
+  }, /*#__PURE__*/React.createElement("label", null, "Patolog\xEDa", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Restringe los an\xE1lisis a las dispensaciones con ese diagn\xF3stico registrado. No afecta a la persistencia y la adherencia, que tienen sus propios filtros."
+  })), /*#__PURE__*/React.createElement("select", {
     value: filters.pathology,
     onChange: e => setFilters({
       ...filters,
@@ -14686,7 +15476,9 @@ function App() {
     value: pathology
   }, pathology)))), /*#__PURE__*/React.createElement("div", {
     className: "filter-group"
-  }, /*#__PURE__*/React.createElement("label", null, "Especialidad farmac\xE9utica"), /*#__PURE__*/React.createElement("select", {
+  }, /*#__PURE__*/React.createElement("label", null, "Especialidad farmac\xE9utica", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Restringe los an\xE1lisis a las dispensaciones de ese producto concreto (marca y presentaci\xF3n). No afecta a la persistencia y la adherencia."
+  })), /*#__PURE__*/React.createElement("select", {
     value: filters.productSpecialty,
     onChange: e => setFilters({
       ...filters,
@@ -14699,7 +15491,9 @@ function App() {
     value: spec
   }, spec)))), /*#__PURE__*/React.createElement("div", {
     className: "filter-group"
-  }, /*#__PURE__*/React.createElement("label", null, "Principio activo"), /*#__PURE__*/React.createElement("select", {
+  }, /*#__PURE__*/React.createElement("label", null, "Principio activo", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Todos los principios activos, o una selecci\xF3n personalizada de varios. No afecta a la persistencia y la adherencia, donde se eligen los medicamentos a comparar."
+  })), /*#__PURE__*/React.createElement("select", {
     value: paFilterMode,
     onChange: e => {
       setPaFilterMode(e.target.value);
@@ -14874,7 +15668,9 @@ function App() {
     }, nPac));
   })))), /*#__PURE__*/React.createElement("div", {
     className: "filter-group"
-  }, /*#__PURE__*/React.createElement("label", null, "Fecha desde"), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("label", null, "Fecha desde", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Primera fecha de dispensaci\xF3n que se incluye en los an\xE1lisis generales."
+  })), /*#__PURE__*/React.createElement("input", {
     type: "date",
     value: filters.dateFrom,
     onChange: e => setFilters({
@@ -14889,7 +15685,9 @@ function App() {
     }
   })), /*#__PURE__*/React.createElement("div", {
     className: "filter-group"
-  }, /*#__PURE__*/React.createElement("label", null, "Fecha hasta"), /*#__PURE__*/React.createElement("input", {
+  }, /*#__PURE__*/React.createElement("label", null, "Fecha hasta", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "\xDAltima fecha de dispensaci\xF3n que se incluye en los an\xE1lisis generales."
+  })), /*#__PURE__*/React.createElement("input", {
     type: "date",
     value: filters.dateTo,
     onChange: e => setFilters({
@@ -14949,7 +15747,7 @@ function App() {
   }, "\uD83D\uDCC4 Informes"), /*#__PURE__*/React.createElement("button", {
     className: `toggle-btn ${viewMode === 'persistence' ? 'active' : ''}`,
     onClick: () => setViewMode('persistence')
-  }, "\uD83D\uDCC8 Persistencia"), /*#__PURE__*/React.createElement("button", {
+  }, "\uD83D\uDCC8 Persistencia y adherencia"), /*#__PURE__*/React.createElement("button", {
     className: `toggle-btn ${viewMode === 'patient' ? 'active' : ''}`,
     onClick: () => setViewMode('patient')
   }, "\uD83D\uDD0D Hist\xF3rico por paciente"), /*#__PURE__*/React.createElement("button", {
@@ -15331,11 +16129,11 @@ function App() {
     }
   }, "Qu\xE9 f\xE1rmacos concentran el gasto (regla 80/20)")), /*#__PURE__*/React.createElement("button", {
     className: "menu-button",
-    onClick: () => processOption('adherencia'),
+    onClick: () => setViewMode('persistence'),
     disabled: !data
   }, /*#__PURE__*/React.createElement("span", {
     className: "number"
-  }, "\uD83D\uDCC8"), "Distribuci\xF3n de adherencia (MPR)", /*#__PURE__*/React.createElement("span", {
+  }, "\uD83D\uDCC8"), "Adherencia (PDC y MPR)", /*#__PURE__*/React.createElement("span", {
     style: {
       display: 'block',
       fontSize: '0.75rem',
@@ -15343,7 +16141,7 @@ function App() {
       marginTop: '4px',
       fontWeight: '400'
     }
-  }, "Histograma poblacional de adherencia")), /*#__PURE__*/React.createElement("button", {
+  }, "Se calcula junto a la persistencia, por f\xE1rmaco")), /*#__PURE__*/React.createElement("button", {
     className: "menu-button",
     onClick: () => processOption('switching'),
     disabled: !data
@@ -17293,19 +18091,24 @@ function App() {
     style: {
       marginBottom: '20px'
     }
-  }, "\u2139\uFE0F ", /*#__PURE__*/React.createElement("strong", null, "Persistencia al tratamiento:"), " Analiza qu\xE9 pacientes que ", /*#__PURE__*/React.createElement("em", null, "inician"), " un tratamiento contin\xFAan con \xE9l a lo largo del tiempo y dibuja la curva de Kaplan-Meier. Cada medicamento se analiza de forma independiente."), /*#__PURE__*/React.createElement("h2", {
+  }, "\u2139\uFE0F ", /*#__PURE__*/React.createElement("strong", null, "Persistencia y adherencia al tratamiento:"), " Analiza qu\xE9 pacientes que ", /*#__PURE__*/React.createElement("em", null, "inician"), " un f\xE1rmaco contin\xFAan con \xE9l a lo largo del tiempo (curva de Kaplan-Meier) y c\xF3mo lo toman mientras est\xE1n en tratamiento (PDC y MPR). Cada f\xE1rmaco se analiza de forma independiente para poder compararlos. Pasa el rat\xF3n por el icono ", /*#__PURE__*/React.createElement("span", {
+    className: "infotip-icon",
+    style: {
+      display: 'inline-flex'
+    }
+  }, "i"), " de cada campo para ver su definici\xF3n."), /*#__PURE__*/React.createElement("h2", {
     style: {
       marginBottom: '8px',
       color: '#1B4354'
     }
-  }, "\uD83D\uDCC8 Persistencia al tratamiento"), /*#__PURE__*/React.createElement("p", {
+  }, "\uD83D\uDCC8 Persistencia y adherencia"), /*#__PURE__*/React.createElement("p", {
     style: {
       marginTop: 0,
       marginBottom: '24px',
       color: '#64748b',
       fontSize: '0.9em'
     }
-  }, "Selecciona el tipo de medicamento, la fecha de inicio del an\xE1lisis y los medicamentos a comparar."), !data && /*#__PURE__*/React.createElement("div", {
+  }, "Selecciona el tipo de f\xE1rmaco, la ventana de an\xE1lisis, la poblaci\xF3n y los medicamentos a comparar."), !data && /*#__PURE__*/React.createElement("div", {
     className: "alert",
     style: {
       background: '#fff3cd',
@@ -17313,7 +18116,16 @@ function App() {
       borderRadius: '10px',
       padding: '15px'
     }
-  }, "\u26A0\uFE0F Debes cargar un archivo de datos primero."), data && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, "\u26A0\uFE0F Debes cargar un archivo de datos primero."), data && engineInfo && engineInfo.error && /*#__PURE__*/React.createElement("div", {
+    className: "alert",
+    style: {
+      background: '#fdecea',
+      border: '1px solid #e74c3c',
+      borderRadius: '10px',
+      padding: '15px',
+      color: '#a93226'
+    }
+  }, "\u26A0\uFE0F No se pudieron depurar los datos del fichero para este an\xE1lisis: ", engineInfo.error), data && engineInfo && !engineInfo.error && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: {
       background: '#fff',
       border: '1px solid #e2e8f0',
@@ -17332,7 +18144,9 @@ function App() {
       color: '#1a5276',
       marginBottom: '8px'
     }
-  }, "1. Trabajar con:"), /*#__PURE__*/React.createElement("div", {
+  }, "1. Trabajar con:", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Principio activo: agrupa todas las marcas del mismo principio activo; un cambio de marca con el mismo principio activo NO se considera abandono. Presentaci\xF3n comercial: cada marca es un f\xE1rmaco distinto; el cambio a otra marca (incluso con el mismo principio activo, p. ej. de referencia a biosimilar) S\xCD cuenta como evento, lo que permite comparar la persistencia entre marcas."
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: '10px',
@@ -17373,12 +18187,16 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     style: {
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
       fontSize: '0.82em',
       color: '#475569',
-      marginBottom: '4px'
+      marginBottom: '4px',
+      fontWeight: 600
     }
-  }, "Inicio del an\xE1lisis"), /*#__PURE__*/React.createElement("input", {
+  }, "Inicio del an\xE1lisis", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Fecha desde la que se incluyen nuevos usuarios. Debe ser igual o posterior a la primera dispensaci\xF3n del fichero m\xE1s el periodo de lavado, para poder comprobar la historia previa de cada paciente. Si se deja en blanco se usa esa fecha m\xEDnima."
+  })), /*#__PURE__*/React.createElement("input", {
     type: "date",
     value: persistStartDate,
     onChange: e => {
@@ -17393,12 +18211,16 @@ function App() {
     }
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     style: {
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
       fontSize: '0.82em',
       color: '#475569',
-      marginBottom: '4px'
+      marginBottom: '4px',
+      fontWeight: 600
     }
-  }, "Fin de inclusi\xF3n (reclutamiento)"), /*#__PURE__*/React.createElement("input", {
+  }, "Fin de inclusi\xF3n (reclutamiento)", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "\xDAltima fecha en que un paciente puede iniciar el f\xE1rmaco para entrar en el an\xE1lisis. Si se deja en blanco, coincide con el fin de observaci\xF3n."
+  })), /*#__PURE__*/React.createElement("input", {
     type: "date",
     value: persistInclusionEnd,
     onChange: e => {
@@ -17413,12 +18235,16 @@ function App() {
     }
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
     style: {
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
       fontSize: '0.82em',
       color: '#475569',
-      marginBottom: '4px'
+      marginBottom: '4px',
+      fontWeight: 600
     }
-  }, "Fin de observaci\xF3n"), /*#__PURE__*/React.createElement("input", {
+  }, "Fin de observaci\xF3n", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Fecha en la que se corta el seguimiento de todos los pacientes (censura administrativa): quien sigue en tratamiento en esa fecha queda censurado. Si se deja en blanco se usa la \xFAltima dispensaci\xF3n del fichero."
+  })), /*#__PURE__*/React.createElement("input", {
     type: "date",
     value: persistObsEnd,
     onChange: e => {
@@ -17431,14 +18257,14 @@ function App() {
       borderRadius: '8px',
       fontSize: '0.95em'
     }
-  }))), getMinStartDate() && /*#__PURE__*/React.createElement("p", {
+  }))), getPersistMinStart() && /*#__PURE__*/React.createElement("p", {
     style: {
       margin: '10px 0 0',
       fontSize: '0.83em',
       color: '#64748b',
       lineHeight: 1.5
     }
-  }, "\uD83D\uDCC5 Inicio m\xEDnimo permitido (1\xAA dispensaci\xF3n + 4 meses de lavado): ", /*#__PURE__*/React.createElement("strong", null, getMinStartDate().toLocaleDateString('es-ES')), ". \xDAltima fecha de la tabla: ", /*#__PURE__*/React.createElement("strong", null, getTableLastDate() && getTableLastDate().toLocaleDateString('es-ES')), ".", /*#__PURE__*/React.createElement("br", null), "Solo se incluyen pacientes que ", /*#__PURE__*/React.createElement("strong", null, "inician"), " el tratamiento entre el inicio y el fin de inclusi\xF3n. El seguimiento de todos se corta en el fin de observaci\xF3n (censura administrativa). Si dejas en blanco el fin de inclusi\xF3n y de observaci\xF3n, se usa la \xFAltima fecha de la tabla.")), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDCC5 Inicio m\xEDnimo permitido (1\xAA dispensaci\xF3n del fichero + ", persistParams.lavadoMeses, " meses de lavado): ", /*#__PURE__*/React.createElement("strong", null, getPersistMinStart().toLocaleDateString('es-ES')), ". \xDAltima fecha del fichero: ", /*#__PURE__*/React.createElement("strong", null, getPersistLastDate() && getPersistLastDate().toLocaleDateString('es-ES')), ".", /*#__PURE__*/React.createElement("br", null), "Solo se incluyen pacientes que ", /*#__PURE__*/React.createElement("strong", null, "inician"), " el f\xE1rmaco entre el inicio y el fin de inclusi\xF3n. El seguimiento de todos se corta en el fin de observaci\xF3n. Si dejas en blanco las fechas, se usan los valores por defecto.")), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: '18px'
     }
@@ -17450,16 +18276,19 @@ function App() {
       marginBottom: '8px'
     }
   }, "3. Poblaci\xF3n a analizar:", /*#__PURE__*/React.createElement(InfoTip, {
-    text: "Naive: pacientes que inician el f\xE1rmaco sin haber recibido antes ning\xFAn tratamiento de la misma clase dentro del universo de datos analizado. No naive: pacientes que cambian desde otro tratamiento previo. 'Todos' combina ambos grupos."
+    text: "Naive: el paciente no tiene ninguna dispensaci\xF3n de otro f\xE1rmaco antes de empezar el analizado (se mide respecto al primer uso de cada paciente, no respecto a la fecha de inicio del an\xE1lisis). No naive: con alguna dispensaci\xF3n previa de un f\xE1rmaco distinto, incluidos los que cambian de f\xE1rmaco durante el periodo. Todos: ambos grupos."
   })), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: '10px',
       flexWrap: 'wrap'
     }
-  }, [['all', 'Todos (naive + cambios)'], ['naive', 'Solo naive'], ['noNaive', 'Solo no naive']].map(([val, lbl]) => /*#__PURE__*/React.createElement("button", {
+  }, [['all', 'Todos (naive + no naive)'], ['naive', 'Solo naive'], ['noNaive', 'Solo no naive']].map(([val, lbl]) => /*#__PURE__*/React.createElement("button", {
     key: val,
-    onClick: () => setPersistCohort(val),
+    onClick: () => {
+      setPersistCohort(val);
+      setPersistResults(null);
+    },
     style: {
       padding: '8px 16px',
       borderRadius: '8px',
@@ -17481,7 +18310,9 @@ function App() {
       color: '#1a5276',
       marginBottom: '8px'
     }
-  }, "4. Granularidad temporal:"), /*#__PURE__*/React.createElement("div", {
+  }, "4. Granularidad temporal:", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Intervalo entre los puntos en que se muestra la persistencia (mensual, trimestral o anual). No cambia el c\xE1lculo: solo la gr\xE1fica y la tabla de puntos."
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: '10px',
@@ -17489,7 +18320,10 @@ function App() {
     }
   }, [['months', 'Mensual'], ['quarters', 'Trimestral'], ['years', 'Anual']].map(([val, lbl]) => /*#__PURE__*/React.createElement("button", {
     key: val,
-    onClick: () => setPersistGranularity(val),
+    onClick: () => {
+      setPersistGranularity(val);
+      setPersistResults(null);
+    },
     style: {
       padding: '8px 16px',
       borderRadius: '8px',
@@ -17511,7 +18345,9 @@ function App() {
       color: '#1a5276',
       marginBottom: '8px'
     }
-  }, "5. Filtros opcionales (acotan el universo de an\xE1lisis):"), /*#__PURE__*/React.createElement("div", {
+  }, "5. Filtros opcionales:", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Restringen el an\xE1lisis a los pacientes cuya dispensaci\xF3n inicial (la primera del f\xE1rmaco analizado) pertenece al servicio o la patolog\xEDa elegidos. La historia previa del paciente NO se recorta: un tratamiento previo en otro servicio o patolog\xEDa sigue contando para clasificar naive / no naive."
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
       gap: '12px',
@@ -17523,18 +18359,17 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement("label", {
     style: {
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
       fontSize: '0.85em',
       color: '#475569',
       marginBottom: '4px'
     }
-  }, "Servicio prescriptor"), /*#__PURE__*/React.createElement("select", {
+  }, "Servicio prescriptor", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Servicio que prescribe el f\xE1rmaco en la dispensaci\xF3n inicial del paciente."
+  })), /*#__PURE__*/React.createElement("select", {
     value: persistService,
-    onChange: e => {
-      setPersistService(e.target.value);
-      setPersistSelected(new Set());
-      setPersistResults(null);
-    },
+    onChange: e => cambiarFiltroPersist('servicio', e.target.value),
     style: {
       width: '100%',
       padding: '8px 10px',
@@ -17553,18 +18388,17 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement("label", {
     style: {
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
       fontSize: '0.85em',
       color: '#475569',
       marginBottom: '4px'
     }
-  }, "Patolog\xEDa"), /*#__PURE__*/React.createElement("select", {
+  }, "Patolog\xEDa", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Diagn\xF3stico registrado en la dispensaci\xF3n inicial del paciente."
+  })), /*#__PURE__*/React.createElement("select", {
     value: persistPathology,
-    onChange: e => {
-      setPersistPathology(e.target.value);
-      setPersistSelected(new Set());
-      setPersistResults(null);
-    },
+    onChange: e => cambiarFiltroPersist('patologia', e.target.value),
     style: {
       width: '100%',
       padding: '8px 10px',
@@ -17584,18 +18418,37 @@ function App() {
       color: '#475569',
       fontStyle: 'italic'
     }
-  }, "\u2139\uFE0F Los filtros se aplican a TODAS las dispensaciones antes del an\xE1lisis. Los pacientes con tratamientos previos en otros servicios o patolog\xEDas se considerar\xE1n naive porque su historia previa queda fuera del universo seleccionado.")), /*#__PURE__*/React.createElement("div", {
+  }, "\u2139\uFE0F Los filtros se eval\xFAan sobre la dispensaci\xF3n inicial de cada paciente. Su historia previa completa se usa para clasificar naive / no naive.")), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: '18px'
     }
   }, /*#__PURE__*/React.createElement("label", {
     style: {
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
       fontWeight: 600,
       color: '#1a5276',
       marginBottom: '8px'
     }
-  }, "6. Medicamentos a comparar (", persistSelected.size, " seleccionados):"), /*#__PURE__*/React.createElement("input", {
+  }, "6. Medicamentos a comparar (", persistSelected.size, " seleccionados):", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Cada medicamento seleccionado se analiza de forma independiente y se dibuja su curva para poder compararlos. Entre par\xE9ntesis, n\xBA de pacientes del fichero que han recibido ese medicamento."
+  }), persistSelected.size > 0 && /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setPersistSelected(new Set());
+      setPersistResults(null);
+    },
+    style: {
+      marginLeft: '12px',
+      padding: '2px 10px',
+      fontSize: '0.78em',
+      border: '1px solid #cbd5e1',
+      borderRadius: '6px',
+      background: '#f8fafc',
+      color: '#475569',
+      cursor: 'pointer',
+      fontWeight: 500
+    }
+  }, "Limpiar selecci\xF3n")), /*#__PURE__*/React.createElement("input", {
     type: "text",
     value: persistSearch,
     onChange: e => setPersistSearch(e.target.value),
@@ -17608,7 +18461,14 @@ function App() {
       borderRadius: '8px',
       marginBottom: '10px'
     }
-  }), /*#__PURE__*/React.createElement("div", {
+  }), (persistService || persistPathology) && /*#__PURE__*/React.createElement("p", {
+    style: {
+      margin: '0 0 8px',
+      fontSize: '0.82em',
+      color: '#475569',
+      fontStyle: 'italic'
+    }
+  }, "\u2139\uFE0F Solo se muestran los medicamentos con pacientes que los iniciaron en ", persistService || 'cualquier servicio', " / ", persistPathology || 'cualquier patología', ". El n\xBA entre par\xE9ntesis cuenta solo esos pacientes."), /*#__PURE__*/React.createElement("div", {
     style: {
       maxHeight: '220px',
       overflowY: 'auto',
@@ -17617,8 +18477,13 @@ function App() {
       padding: '10px',
       background: '#f8fafc'
     }
-  }, getPersistMedList().filter(m => m.toLowerCase().includes(persistSearch.toLowerCase())).map(m => /*#__PURE__*/React.createElement("label", {
-    key: m,
+  }, getPersistMedList().length === 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: '#94a3b8',
+      fontSize: '0.9em'
+    }
+  }, "Ning\xFAn medicamento cumple los filtros elegidos."), getPersistMedList().filter(m => m.nombre.toLowerCase().includes(persistSearch.toLowerCase())).map(m => /*#__PURE__*/React.createElement("label", {
+    key: m.nombre,
     style: {
       display: 'flex',
       alignItems: 'center',
@@ -17629,26 +18494,232 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement("input", {
     type: "checkbox",
-    checked: persistSelected.has(m),
+    checked: persistSelected.has(m.nombre),
     onChange: () => {
       const ns = new Set(persistSelected);
-      if (ns.has(m)) ns.delete(m);else ns.add(m);
+      if (ns.has(m.nombre)) ns.delete(m.nombre);else ns.add(m.nombre);
       setPersistSelected(ns);
+      setPersistResults(null);
     }
-  }), /*#__PURE__*/React.createElement("span", null, m))))), /*#__PURE__*/React.createElement("button", {
+  }), /*#__PURE__*/React.createElement("span", null, m.nombre, " ", /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: '#94a3b8'
+    }
+  }, "(", m.pacientes, ")")))))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: '18px'
+    }
+  }, /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'block',
+      fontWeight: 600,
+      color: '#1a5276',
+      marginBottom: '10px'
+    }
+  }, "7. Par\xE1metros del c\xE1lculo:"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: '14px',
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement(ParamField, {
+    label: "Periodo de lavado",
+    suffix: "meses",
+    min: 0,
+    value: persistParams.lavadoMeses,
+    onChange: v => setPersistParam('lavadoMeses', v),
+    tip: "Historia previa que se exige ANTES del inicio del an\xE1lisis para poder afirmar que un paciente es nuevo usuario y naive (por defecto 12 meses). No es el tiempo para considerar un cambio de tratamiento. Cuanto mayor, m\xE1s fiable es la clasificaci\xF3n naive, pero m\xE1s tarde puede empezar el an\xE1lisis. Para analizar solo pacientes naive el m\xEDnimo es de 4 meses."
+  }), /*#__PURE__*/React.createElement(ParamField, {
+    label: "Tolerancia (abandono)",
+    suffix: "d\xEDas",
+    min: 0,
+    value: persistParams.tolerancia,
+    onChange: v => setPersistParam('tolerancia', v),
+    tip: "D\xEDas sin cobertura, contados desde que se agota el suministro de la \xFAltima dispensaci\xF3n, a partir de los cuales se considera que el paciente ha abandonado el tratamiento (por defecto 180: tolera, por ejemplo, dos dosis seguidas omitidas en un f\xE1rmaco de 12 semanas). Un valor mayor aumenta la persistencia estimada: la tabla de sensibilidad de los resultados muestra cu\xE1nto."
+  }), /*#__PURE__*/React.createElement(ParamField, {
+    label: "Umbral de adherencia (PDC)",
+    suffix: "%",
+    min: 1,
+    max: 100,
+    value: persistParams.umbralAdherencia,
+    onChange: v => setPersistParam('umbralAdherencia', v),
+    tip: "PDC m\xEDnimo a partir del cual se considera adherente a un paciente (por defecto 80 %). El PDC es la proporci\xF3n de d\xEDas cubiertos por la medicaci\xF3n dispensada durante el episodio de tratamiento."
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setShowPersistAdvanced(!showPersistAdvanced),
+    style: {
+      marginTop: '12px',
+      padding: '6px 14px',
+      fontSize: '0.85em',
+      border: '1px solid #cbd5e1',
+      borderRadius: '8px',
+      background: '#f8fafc',
+      color: '#475569',
+      cursor: 'pointer',
+      fontWeight: 600
+    }
+  }, showPersistAdvanced ? '▾ Ocultar parámetros avanzados' : '▸ Mostrar parámetros avanzados'), showPersistAdvanced && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: '14px',
+      padding: '14px 16px',
+      background: '#f8fafc',
+      border: '1px solid #e2e8f0',
+      borderRadius: '8px'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.8em',
+      fontWeight: 700,
+      color: '#64748b',
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em',
+      marginBottom: '10px'
+    }
+  }, "Cambios de tratamiento"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: '14px',
+      flexWrap: 'wrap',
+      marginBottom: '16px'
+    }
+  }, /*#__PURE__*/React.createElement(ParamField, {
+    label: "Ventana de f\xE1rmaco nuevo",
+    suffix: "d\xEDas",
+    min: 0,
+    value: persistParams.ventanaNuevo,
+    onChange: v => setPersistParam('ventanaNuevo', v),
+    tip: "Para contar un cambio, el f\xE1rmaco al que pasa el paciente no debe haberse dispensado en los N d\xEDas previos (por defecto 120). Evita confundir con un cambio un f\xE1rmaco que ya se tomaba a la vez. Es independiente del periodo de lavado."
+  }), /*#__PURE__*/React.createElement(ParamField, {
+    label: "Solape de transici\xF3n",
+    suffix: "d\xEDas",
+    min: 0,
+    value: persistParams.solape,
+    onChange: v => setPersistParam('solape', v),
+    tip: "Se admite que el f\xE1rmaco nuevo se recoja hasta N d\xEDas antes de la \xFAltima recogida del anterior y siga consider\xE1ndose un cambio (por defecto 30). Con m\xE1s antelaci\xF3n se considera uso simult\xE1neo, no un cambio."
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.8em',
+      fontWeight: 700,
+      color: '#64748b',
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em',
+      marginBottom: '10px'
+    }
+  }, "Adherencia"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: '14px',
+      flexWrap: 'wrap',
+      marginBottom: '16px'
+    }
+  }, /*#__PURE__*/React.createElement(ParamField, {
+    label: "Periodo m\xEDnimo evaluable",
+    suffix: "d\xEDas",
+    min: 1,
+    value: persistParams.pdcMinDias,
+    onChange: v => setPersistParam('pdcMinDias', v),
+    tip: "Duraci\xF3n m\xEDnima del periodo evaluado (de la primera a la \xFAltima dispensaci\xF3n del episodio) para calcular PDC y MPR (por defecto 120 d\xEDas). Los pacientes con menos se excluyen y se cuentan: un porcentaje alto suele reflejar abandonos precoces."
+  }), /*#__PURE__*/React.createElement(ParamField, {
+    label: "Umbral de MPR (alerta)",
+    suffix: "%",
+    min: 100,
+    value: persistParams.umbralMPR,
+    onChange: v => setPersistParam('umbralMPR', v),
+    tip: "MPR a partir del cual se sospecha acumulaci\xF3n de medicaci\xF3n (por defecto 110 %). El MPR puede superar el 100 %: las recogidas anticipadas compensan a los retrasos."
+  }), /*#__PURE__*/React.createElement(ParamField, {
+    label: "Umbral de sobrante (alerta)",
+    suffix: "d\xEDas",
+    min: 0,
+    value: persistParams.umbralSobrante,
+    onChange: v => setPersistParam('umbralSobrante', v),
+    tip: "D\xEDas de medicaci\xF3n que el paciente conservaba al hacer su \xFAltima recogida a partir de los cuales se alerta de posible acumulaci\xF3n (por defecto 30)."
+  }), /*#__PURE__*/React.createElement(ParamField, {
+    label: "Adelanto m\xEDnimo",
+    suffix: "d\xEDas",
+    min: 0,
+    value: persistParams.umbralAdelanto,
+    onChange: v => setPersistParam('umbralAdelanto', v),
+    tip: "D\xEDas de adelanto con los que se recoge una dispensaci\xF3n para contarla como recogida anticipada (por defecto 10)."
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.8em',
+      fontWeight: 700,
+      color: '#64748b',
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em',
+      marginBottom: '10px'
+    }
+  }, "Curva de persistencia"), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: '14px',
+      flexWrap: 'wrap',
+      marginBottom: '16px'
+    }
+  }, /*#__PURE__*/React.createElement(ParamField, {
+    label: "M\xEDnimo de pacientes en riesgo",
+    min: 1,
+    value: persistParams.minEnRiesgo,
+    onChange: v => setPersistParam('minEnRiesgo', v),
+    tip: "N\xBA m\xEDnimo de pacientes en riesgo para considerar fiable la cola de la curva de Kaplan-Meier. Por debajo se marca como poco fiable (por defecto 10)."
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: '0.8em',
+      fontWeight: 700,
+      color: '#64748b',
+      textTransform: 'uppercase',
+      letterSpacing: '0.04em',
+      marginBottom: '10px'
+    }
+  }, "Periodos sin datos en el fichero"), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      fontSize: '0.9em',
+      color: '#334155',
+      marginBottom: '10px',
+      cursor: 'pointer'
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: !!persistParams.excluirFaltantes,
+    onChange: e => setPersistParam('excluirFaltantes', e.target.checked)
+  }), "Excluir de los c\xE1lculos los periodos sin datos", /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Si el fichero tiene periodos sin dispensaciones (huecos de datos), un paciente que deb\xEDa recoger en esas fechas parecer\xEDa haber abandonado. Con esta opci\xF3n se restan esos d\xEDas de los huecos de la persistencia y se excluyen del PDC y del MPR los intervalos entre dos recogidas que los contienen. Recomendado."
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: 'flex',
+      gap: '14px',
+      flexWrap: 'wrap'
+    }
+  }, /*#__PURE__*/React.createElement(ParamField, {
+    label: "D\xEDas laborables consecutivos",
+    min: 1,
+    value: persistParams.faltDiasMin,
+    onChange: v => setPersistParam('faltDiasMin', v),
+    tip: "N\xBA de d\xEDas laborables seguidos con un volumen de dispensaciones anormalmente bajo para marcar un periodo sin datos (por defecto 3). Los festivos y puentes de 1-2 d\xEDas no se marcan."
+  }), /*#__PURE__*/React.createElement(ParamField, {
+    label: "Umbral de volumen",
+    suffix: "%",
+    min: 1,
+    max: 100,
+    value: persistParams.faltUmbral,
+    onChange: v => setPersistParam('faltUmbral', v),
+    tip: "Un d\xEDa laborable se considera de volumen bajo si sus dispensaciones son menos de este porcentaje de lo habitual (mediana de los d\xEDas laborables de las 4 semanas anteriores y posteriores). Por defecto 40 %."
+  })))), /*#__PURE__*/React.createElement("button", {
     onClick: calcularPersistencia,
-    disabled: persistSelected.size === 0 || !persistStartDate,
+    disabled: persistSelected.size === 0,
     style: {
       padding: '12px 28px',
       borderRadius: '8px',
       border: 'none',
       fontWeight: 700,
       fontSize: '1.05em',
-      cursor: persistSelected.size === 0 || !persistStartDate ? 'not-allowed' : 'pointer',
-      background: persistSelected.size === 0 || !persistStartDate ? '#ccc' : '#1B4354',
+      cursor: persistSelected.size === 0 ? 'not-allowed' : 'pointer',
+      background: persistSelected.size === 0 ? '#ccc' : '#1B4354',
       color: '#fff'
     }
-  }, "Calcular persistencia")), persistError && /*#__PURE__*/React.createElement("div", {
+  }, "Calcular persistencia y adherencia")), persistError && /*#__PURE__*/React.createElement("div", {
     className: "alert",
     style: {
       background: '#fdecea',
@@ -17697,7 +18768,30 @@ function App() {
       color: '#fff',
       fontSize: '0.95em'
     }
-  }, "\uD83D\uDCC4 Exportar a PDF")), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDCC4 Exportar a PDF")), persistResults.avisos && persistResults.avisos.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fff3cd',
+      border: '1px solid #ffeeba',
+      borderRadius: '8px',
+      padding: '10px 14px',
+      marginBottom: '12px',
+      fontSize: '0.86em',
+      color: '#856404'
+    }
+  }, persistResults.avisos.map((a, i) => /*#__PURE__*/React.createElement("div", {
+    key: i
+  }, "\u26A0\uFE0F ", a))), persistResults.faltantes && persistResults.faltantes.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fff8e6',
+      border: '1px solid #ffe0a3',
+      borderRadius: '8px',
+      padding: '10px 14px',
+      marginBottom: '16px',
+      fontSize: '0.86em',
+      color: '#7a5b00',
+      lineHeight: 1.55
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "\uD83D\uDCC5 Periodos sin datos en el fichero:"), ' ', persistResults.faltantes.map(pf => `${MotorIMID.diaATexto(pf.ini)} – ${MotorIMID.diaATexto(pf.fin)}`).join('  ·  '), ".", ' ', persistResults.params.excluirFaltantes ? /*#__PURE__*/React.createElement("span", null, "Se han ", /*#__PURE__*/React.createElement("strong", null, "excluido de los c\xE1lculos"), ": se restan de los huecos de persistencia y se excluyen del PDC y MPR los intervalos que los contienen (", persistResults.perMed.map(m => `${m.med.length > 18 ? m.med.slice(0, 18) + '…' : m.med}: ${m.ajustadosPorFaltantes} pacientes afectados`).join('; '), ").") : /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("strong", null, "No se han excluido"), " de los c\xE1lculos: puede haber abandonos y huecos de cobertura falsos.")), /*#__PURE__*/React.createElement("div", {
     style: {
       background: '#fff',
       border: '1px solid #e2e8f0',
@@ -17770,7 +18864,86 @@ function App() {
         color: p.reliable ? '#334155' : '#e67e22'
       }
     }, p.atRisk)));
-  }))))), persistResults.perMed.map((m, idx) => /*#__PURE__*/React.createElement("div", {
+  }))))), (persistResults.comparacion && persistResults.comparacion.logRank || persistResults.sensibilidad && persistResults.sensibilidad.length > 0) && /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fff',
+      border: '1px solid #e2e8f0',
+      borderRadius: '10px',
+      padding: '20px 24px',
+      marginBottom: '24px'
+    }
+  }, persistResults.comparacion && persistResults.comparacion.logRank && persistResults.comparacion.logRank.p !== null && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: '18px'
+    }
+  }, /*#__PURE__*/React.createElement("strong", {
+    style: {
+      color: '#1a5276'
+    }
+  }, "Comparaci\xF3n de las curvas (log-rank)"), /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Test que contrasta si las curvas de persistencia de los f\xE1rmacos seleccionados son iguales. Un valor de p peque\xF1o (< 0,05) indica que hay diferencias. No ajusta por otras variables (p. ej. proporci\xF3n de pacientes naive): para comparar f\xE1rmacos con distinta proporci\xF3n de naive conviene analizar solo naive. Si un mismo paciente aparece en varias curvas el test no es formalmente v\xE1lido."
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: '6px',
+      fontSize: '0.92em',
+      color: '#334155'
+    }
+  }, "\u03C7\xB2 = ", /*#__PURE__*/React.createElement("strong", null, fmt1(persistResults.comparacion.logRank.chi2).replace('.', ',')), ", gl = ", persistResults.comparacion.logRank.gl, ", p ", persistResults.comparacion.logRank.p < 0.001 ? '< 0,001' : '= ' + persistResults.comparacion.logRank.p.toFixed(3).replace('.', ','), persistResults.comparacion.pacientesEnVariosGrupos > 0 && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: '#b9770e'
+    }
+  }, " \xB7 \u26A0\uFE0F ", persistResults.comparacion.pacientesEnVariosGrupos, " pacientes en m\xE1s de una curva"))), persistResults.sensibilidad && persistResults.sensibilidad.length > 0 && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("strong", {
+    style: {
+      color: '#1a5276'
+    }
+  }, "Sensibilidad a la tolerancia: persistencia a 12 meses (%)"), /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Persistencia estimada a los 12 meses repitiendo el c\xE1lculo con distintas tolerancias de abandono. Muestra cu\xE1nto depende el resultado de este par\xE1metro; la fila resaltada es la que se est\xE1 usando. Las comparaciones entre f\xE1rmacos son m\xE1s s\xF3lidas si se mantienen con varias tolerancias."
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      overflowX: 'auto',
+      marginTop: '8px'
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    style: {
+      borderCollapse: 'collapse',
+      fontSize: '0.85em',
+      minWidth: '420px'
+    }
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+    style: {
+      background: '#1B4354',
+      color: '#fff'
+    }
+  }, /*#__PURE__*/React.createElement("th", {
+    style: {
+      padding: '6px 12px',
+      textAlign: 'left'
+    }
+  }, "Tolerancia"), persistResults.perMed.map(m => /*#__PURE__*/React.createElement("th", {
+    key: m.med,
+    style: {
+      padding: '6px 12px',
+      textAlign: 'right'
+    }
+  }, m.med.length > 22 ? m.med.slice(0, 22) + '…' : m.med)))), /*#__PURE__*/React.createElement("tbody", null, persistResults.sensibilidad.map(sf => /*#__PURE__*/React.createElement("tr", {
+    key: sf.tolerancia,
+    style: {
+      borderBottom: '1px solid #eee',
+      background: sf.tolerancia === persistResults.params.tolerancia ? '#eaf2f8' : 'transparent',
+      fontWeight: sf.tolerancia === persistResults.params.tolerancia ? 700 : 400
+    }
+  }, /*#__PURE__*/React.createElement("td", {
+    style: {
+      padding: '5px 12px'
+    }
+  }, sf.tolerancia, " d\xEDas", sf.tolerancia === persistResults.params.tolerancia ? ' (actual)' : ''), (sf.elementos || []).map(e => /*#__PURE__*/React.createElement("td", {
+    key: e.elemento,
+    style: {
+      padding: '5px 12px',
+      textAlign: 'right',
+      opacity: e.fiable ? 1 : 0.55
+    }
+  }, fmt1(e.surv12 * 100)))))))))), persistResults.perMed.map((m, idx) => /*#__PURE__*/React.createElement("div", {
     key: m.med,
     style: {
       background: '#fff',
@@ -17827,7 +19000,7 @@ function App() {
   }, "Tratamientos previos (pacientes no naive):"), /*#__PURE__*/React.createElement("table", {
     style: {
       width: '100%',
-      maxWidth: '480px',
+      maxWidth: '520px',
       borderCollapse: 'collapse',
       marginTop: '6px',
       fontSize: '0.85em'
@@ -17860,7 +19033,17 @@ function App() {
     style: {
       padding: '5px 8px'
     }
-  }, pt.name), /*#__PURE__*/React.createElement("td", {
+  }, pt.name, pt.mismoPA && /*#__PURE__*/React.createElement("span", {
+    style: {
+      marginLeft: '6px',
+      fontSize: '0.8em',
+      padding: '1px 6px',
+      borderRadius: '8px',
+      background: '#eaf2f8',
+      color: '#1a5276'
+    },
+    title: "Mismo principio activo: cambio de marca"
+  }, "mismo PA")), /*#__PURE__*/React.createElement("td", {
     style: {
       textAlign: 'right',
       padding: '5px 8px'
@@ -17882,7 +19065,24 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement("strong", null, "Mediana de persistencia:"), /*#__PURE__*/React.createElement(InfoTip, {
     text: "Tiempo (estimado por Kaplan-Meier) en el que la mitad de los pacientes de la cohorte han discontinuado el tratamiento, es decir, cuando la curva de persistencia cruza el 50%. Si la curva no baja del 50% en el periodo observado, la mediana 'no se alcanza'."
-  }), ' ', m.km.medianReached ? /*#__PURE__*/React.createElement("span", null, m.km.median, " d\xEDas (~", (m.km.median / 30.4375).toFixed(1), " meses) \u2014 tiempo en el que la persistencia cae al 50%.") : /*#__PURE__*/React.createElement("span", null, "no alcanzada (la persistencia no desciende por debajo del 50% dentro del per\xEDodo observado).")), /*#__PURE__*/React.createElement("strong", {
+  }), ' ', m.km.medianReached ? /*#__PURE__*/React.createElement("span", null, m.km.median, " d\xEDas (~", (m.km.median / 30.4375).toFixed(1), " meses) \u2014 tiempo en el que la persistencia cae al 50%.") : /*#__PURE__*/React.createElement("span", null, "no alcanzada (la persistencia no desciende por debajo del 50% dentro del per\xEDodo observado).")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginBottom: '14px',
+      fontSize: '0.88em',
+      color: '#334155'
+    }
+  }, /*#__PURE__*/React.createElement("strong", {
+    style: {
+      color: '#1a5276'
+    }
+  }, "Fin de la persistencia:"), /*#__PURE__*/React.createElement(InfoTip, {
+    text: "Abandono: hueco sin cobertura mayor que la tolerancia, sin que empiece otro f\xE1rmaco nuevo. Cambio: abandona el f\xE1rmaco y empieza otro nuevo (se indica el destino). Censurado: sigue en tratamiento al final de la observaci\xF3n."
+  }), ' ', "abandono ", /*#__PURE__*/React.createElement("strong", null, m.motivos.hueco), " \xB7 cambio de f\xE1rmaco ", /*#__PURE__*/React.createElement("strong", null, m.motivos.cambio), " \xB7 censurados (siguen en tratamiento) ", /*#__PURE__*/React.createElement("strong", null, m.motivos.censura), m.destinos.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: '4px',
+      color: '#64748b'
+    }
+  }, "Destino de los cambios: ", m.destinos.slice(0, 5).map(dd => `${dd.destino} (${dd.n})`).join(' · '), m.destinos.length > 5 ? ` · +${m.destinos.length - 5} más` : '')), /*#__PURE__*/React.createElement("strong", {
     style: {
       color: '#1a5276',
       fontSize: '0.92em'
@@ -17943,7 +19143,7 @@ function App() {
       padding: '5px 12px'
     }
   }, p.label, !p.reliable && /*#__PURE__*/React.createElement("span", {
-    title: `Menos de ${m.cohortN >= 0 ? persistResults.minAtRisk : ''} pacientes en riesgo: estimación poco fiable`,
+    title: `Menos de ${persistResults.minAtRisk} pacientes en riesgo: estimación poco fiable`,
     style: {
       color: '#e67e22'
     }
@@ -17975,19 +19175,172 @@ function App() {
       color: '#94a3b8',
       margin: '6px 0 0'
     }
-  }, "\u26A0\uFE0F = menos de ", persistResults.minAtRisk, " pacientes en riesgo (cola poco fiable, mostrada en discontinuo en la curva). \"Persistentes (est.)\" = S(t) \xD7 n, es una estimaci\xF3n, no un recuento exacto."))), /*#__PURE__*/React.createElement("div", {
+  }, "\u26A0\uFE0F = menos de ", persistResults.minAtRisk, " pacientes en riesgo (cola poco fiable, mostrada en discontinuo en la curva). \"Persistentes (est.)\" = S(t) \xD7 n, es una estimaci\xF3n, no un recuento exacto."), m.adherencia && (() => {
+    const ad = m.adherencia,
+      sm = ad.resumen,
+      prm = persistResults.params;
+    const fila = (etq, tip, val) => /*#__PURE__*/React.createElement("tr", {
+      style: {
+        borderBottom: '1px solid #eee'
+      }
+    }, /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: '6px 10px'
+      }
+    }, etq, tip && /*#__PURE__*/React.createElement(InfoTip, {
+      text: tip
+    })), /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: '6px 10px',
+        textAlign: 'right',
+        fontWeight: 600,
+        whiteSpace: 'nowrap'
+      }
+    }, val));
+    const v6 = ad.ventana6,
+      v12 = ad.ventana12;
+    return /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: '22px',
+        borderTop: '2px solid #e2e8f0',
+        paddingTop: '16px'
+      }
+    }, /*#__PURE__*/React.createElement("h4", {
+      style: {
+        margin: '0 0 4px',
+        color: '#1B4354'
+      }
+    }, "\uD83D\uDC8A Adherencia (PDC y MPR)"), /*#__PURE__*/React.createElement("p", {
+      style: {
+        margin: '0 0 12px',
+        fontSize: '0.82em',
+        color: '#64748b',
+        lineHeight: 1.5
+      }
+    }, "Se mide durante el episodio de persistencia de cada paciente (desde su primera dispensaci\xF3n hasta su abandono o cambio, o hasta el cierre). El PDC es el m\xE9todo de elecci\xF3n; el MPR se muestra junto a \xE9l para detectar acumulaci\xF3n de medicaci\xF3n."), /*#__PURE__*/React.createElement("table", {
+      style: {
+        width: '100%',
+        maxWidth: '760px',
+        borderCollapse: 'collapse',
+        fontSize: '0.88em'
+      }
+    }, /*#__PURE__*/React.createElement("tbody", null, fila('Pacientes evaluables / excluidos', `Pacientes cuyo periodo evaluable (de la primera a la última dispensación de su episodio) es de al menos ${prm.pdcMinDias} días / pacientes con un periodo menor, que se excluyen. Un porcentaje alto de excluidos suele reflejar abandonos precoces, que ya recoge la persistencia.`, `${sm.n} / ${ad.excluidos.length}` + (ad.pctExcluidos !== null ? ` (${fmt1(ad.pctExcluidos)} % excluidos)` : '')), fila('PDC: mediana (RIC)', 'Proporción de días cubiertos: días con medicación disponible ÷ días del periodo, con un máximo del 100 %. Las recogidas anticipadas desplazan la cobertura y no cuentan dos veces. Se muestra la mediana y el rango intercuartílico (P25-P75).', sm.n ? `${fmt1(sm.mediana)} % (${fmt1(sm.p25)}–${fmt1(sm.p75)})` : '–'), fila('PDC: media', null, sm.n ? `${fmt1(sm.media)} %` : '–'), fila(`Adherentes (PDC ≥ ${prm.umbralAdherencia} %)`, 'Pacientes evaluables cuyo PDC alcanza el umbral de adherencia configurado.', sm.n ? `${sm.adherentes} (${fmt1(sm.pctAdherentes)} %)` : '–'), fila('MPR: mediana', 'Suministro dispensado (sin la última dispensación) ÷ días del periodo. A diferencia del PDC puede superar el 100 %: las recogidas anticipadas compensan a los retrasos.', sm.n ? `${fmt1(sm.mprMediana)} %` : '–'), fila('Alertas de posible acumulación', `Pacientes con MPR > ${prm.umbralMPR} % o con ${prm.umbralSobrante} o más días de medicación sobrante en su última recogida.`, sm.n ? `${sm.alertas} (${fmt1(sm.pctAlertas)} %)` : '–'), fila('PDC a 6 meses: n · mediana · % adherentes', 'PDC a ventana fija: días cubiertos en los primeros 6 meses desde el inicio ÷ 183. Todo lo posterior a un abandono cuenta como no cubierto, por lo que penaliza a quien abandona (el PDC del episodio no lo hace). Solo pacientes con 6 meses completos observados o que ya hayan abandonado.', v6.n ? `${v6.n} · ${fmt1(v6.mediana)} % · ${fmt1(v6.pctAdherentes)} %` : '–'), fila('PDC a 12 meses: n · mediana · % adherentes', 'PDC a ventana fija: días cubiertos en los primeros 12 meses desde el inicio ÷ 365. Todo lo posterior a un abandono cuenta como no cubierto. Solo pacientes con 12 meses completos observados o que ya hayan abandonado.', v12.n ? `${v12.n} · ${fmt1(v12.mediana)} % · ${fmt1(v12.pctAdherentes)} %` : '–'), ad.intervalosExcluidos > 0 && fila('Intervalos excluidos por periodos sin datos', 'Intervalos entre dos recogidas consecutivas que contienen un periodo sin datos del fichero: se excluyen del numerador y del denominador del PDC y del MPR.', ad.intervalosExcluidos))), persistResults.cohort === 'all' && (ad.porCohorte.naive.n > 0 || ad.porCohorte.noNaive.n > 0) && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: '14px'
+      }
+    }, /*#__PURE__*/React.createElement("strong", {
+      style: {
+        color: '#1a5276',
+        fontSize: '0.9em'
+      }
+    }, "PDC por tipo de paciente"), /*#__PURE__*/React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        fontSize: '0.85em',
+        marginTop: '6px',
+        minWidth: '420px'
+      }
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+      style: {
+        background: '#e2e8f0'
+      }
+    }, /*#__PURE__*/React.createElement("th", {
+      style: {
+        padding: '5px 10px',
+        textAlign: 'left'
+      }
+    }, "Tipo"), /*#__PURE__*/React.createElement("th", {
+      style: {
+        padding: '5px 10px',
+        textAlign: 'right'
+      }
+    }, "Evaluables"), /*#__PURE__*/React.createElement("th", {
+      style: {
+        padding: '5px 10px',
+        textAlign: 'right'
+      }
+    }, "PDC mediana"), /*#__PURE__*/React.createElement("th", {
+      style: {
+        padding: '5px 10px',
+        textAlign: 'right'
+      }
+    }, "% adherentes"))), /*#__PURE__*/React.createElement("tbody", null, [['naive', 'Naive'], ['noNaive', 'No naive']].map(([k, et]) => /*#__PURE__*/React.createElement("tr", {
+      key: k,
+      style: {
+        borderBottom: '1px solid #eee'
+      }
+    }, /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: '5px 10px'
+      }
+    }, et), /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: '5px 10px',
+        textAlign: 'right'
+      }
+    }, ad.porCohorte[k].n), /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: '5px 10px',
+        textAlign: 'right'
+      }
+    }, ad.porCohorte[k].n ? fmt1(ad.porCohorte[k].mediana) + ' %' : '–'), /*#__PURE__*/React.createElement("td", {
+      style: {
+        padding: '5px 10px',
+        textAlign: 'right'
+      }
+    }, ad.porCohorte[k].n ? fmt1(ad.porCohorte[k].pctAdherentes) + ' %' : '–')))))), sm.n > 0 && /*#__PURE__*/React.createElement("div", {
+      style: {
+        marginTop: '14px'
+      }
+    }, /*#__PURE__*/React.createElement("strong", {
+      style: {
+        color: '#1a5276',
+        fontSize: '0.9em'
+      }
+    }, "Distribuci\xF3n del PDC"), /*#__PURE__*/React.createElement("div", {
+      style: {
+        overflowX: 'auto'
+      }
+    }, /*#__PURE__*/React.createElement("table", {
+      style: {
+        borderCollapse: 'collapse',
+        fontSize: '0.85em',
+        marginTop: '6px'
+      }
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", {
+      style: {
+        background: '#e2e8f0'
+      }
+    }, ad.distribucion.map(b => /*#__PURE__*/React.createElement("th", {
+      key: b.tramo,
+      style: {
+        padding: '5px 12px',
+        textAlign: 'center'
+      }
+    }, b.tramo)))), /*#__PURE__*/React.createElement("tbody", null, /*#__PURE__*/React.createElement("tr", null, ad.distribucion.map(b => /*#__PURE__*/React.createElement("td", {
+      key: b.tramo,
+      style: {
+        padding: '5px 12px',
+        textAlign: 'center'
+      }
+    }, b.n, " ", /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: '#94a3b8'
+      }
+    }, "(", fmt1(b.n / sm.n * 100), " %)")))))))));
+  })())), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: '0.8em',
       color: '#94a3b8',
       marginTop: '8px',
       lineHeight: 1.5
     }
-  }, /*#__PURE__*/React.createElement("strong", null, "Metodolog\xEDa:"), " Dise\xF1o de nuevo usuario (lavado de ", persistResults.coverageDays + persistResults.graceDays >= 0 ? '4 meses' : '', " previo). Persistencia estimada por Kaplan-Meier. Fin de persistencia (evento) = discontinuaci\xF3n por falta de reposici\xF3n (hueco entre dispensaciones > ", persistResults.gapDays, " d\xEDas = ", persistResults.coverageDays, " d\xEDas de cobertura + ", persistResults.graceDays, " de margen), fechado al agotarse la cobertura del \xFAltimo envase; o cambio a otro medicamento, lo que ocurra antes. Censura administrativa en el fin de observaci\xF3n para quienes siguen en tratamiento (gap hasta el cierre \u2264 ", persistResults.gapDays, " d\xEDas). IC 95% por transformaci\xF3n log-log (varianza de Greenwood).")), persistDetailMed && persistResults && (() => {
+  }, /*#__PURE__*/React.createElement("strong", null, "Metodolog\xEDa:"), " Dise\xF1o de nuevo usuario con ", persistResults.params.lavadoMeses, " meses de historia previa (lavado) para identificar pacientes naive. La cobertura de cada dispensaci\xF3n se calcula con su cantidad y posolog\xEDa (los solapamientos se desplazan hacia delante). Persistencia estimada por Kaplan-Meier: fin de persistencia (evento) = hueco sin cobertura superior a ", persistResults.params.tolerancia, " d\xEDas tras agotarse el suministro (fechado en el \xFAltimo d\xEDa cubierto), o cambio a un f\xE1rmaco nuevo (", persistResults.params.ventanaNuevo, " d\xEDas de ventana, ", persistResults.params.solape, " de solape de transici\xF3n), lo que ocurra antes. ", persistResults.mode === 'pa' ? 'En principios activos, el cambio de marca con el mismo principio activo no es abandono.' : 'En presentaciones comerciales, el cambio de marca (incluso con el mismo principio activo) cuenta como evento.', " Censura administrativa en el fin de observaci\xF3n. IC 95% por transformaci\xF3n log-log (varianza de Greenwood). Adherencia: PDC (m\xE9todo de elecci\xF3n) y MPR dentro del episodio de persistencia; el PDC a 6 y 12 meses cuenta como no cubierto lo posterior al abandono. Detalle en ESPECIFICACION_METODOLOGIA_IMID.md.")), persistDetailMed && persistResults && (() => {
     const detail = persistResults.perMed.find(x => x.med === persistDetailMed);
     if (!detail) return null;
     const fmt = d => d instanceof Date && !isNaN(d) ? d.toLocaleDateString('es-ES') : '—';
     const outcomeLabel = {
-      gap: 'Discontinuación (falta de reposición)',
+      gap: 'Abandono (hueco sin cobertura)',
       switch: 'Cambio de tratamiento',
       censored: 'En tratamiento al cierre (censurado)'
     };
@@ -18202,7 +19555,7 @@ function App() {
         fontSize: '0.78em',
         color: '#94a3b8'
       }
-    }, "\"Tratamiento anterior/posterior\" = dispensaci\xF3n de otro medicamento inmediatamente previa a la 1\xAA / posterior a la \xFAltima, dentro del universo filtrado."), /*#__PURE__*/React.createElement("button", {
+    }, "\"Tratamiento anterior\" = \xFAltimo f\xE1rmaco distinto dispensado antes de empezar este. \"Tratamiento posterior\" = f\xE1rmaco al que pasa el paciente (si lo hay)."), /*#__PURE__*/React.createElement("button", {
       onClick: () => exportPersistDetailExcel(detail),
       style: {
         padding: '8px 16px',
